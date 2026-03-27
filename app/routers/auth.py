@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.database import get_db
-from app.schemas.user import UserRegister, UserLogin, UserResponse, TokenResponse
+from app.schemas.user import UserRegister, UserLogin
 from app.services.auth_service import AuthService
+from app.utils.dependencies import get_current_user
 from app.utils.helpers import create_api_response
 
 router = APIRouter(
@@ -11,22 +12,12 @@ router = APIRouter(
 )
 
 
-@router.post(
-    "/register",
-    status_code=status.HTTP_201_CREATED,
-    summary="Register new user"
-)
+@router.post("/register", status_code=status.HTTP_201_CREATED)
 def register(
     user_data: UserRegister,
     db: Session = Depends(get_db)
 ):
-    """
-    Register a new user account.
-
-    - **name**: Full name (letters only)
-    - **email**: Valid email address
-    - **password**: Min 8 chars, 1 uppercase, 1 number
-    """
+    """Register a new user account."""
     try:
         user = AuthService.register_user(db, user_data)
         return create_api_response(
@@ -47,20 +38,12 @@ def register(
         )
 
 
-@router.post(
-    "/login",
-    summary="Login and get token"
-)
+@router.post("/login")
 def login(
     login_data: UserLogin,
     db: Session = Depends(get_db)
 ):
-    """
-    Login with email and password.
-
-    Returns JWT access token valid for 24 hours.
-    Use token in Authorization header: **Bearer <token>**
-    """
+    """Login and get JWT token."""
     try:
         result = AuthService.login_user(db, login_data)
         return create_api_response(
@@ -77,18 +60,11 @@ def login(
         )
 
 
-@router.get(
-    "/me",
-    summary="Get current user info"
-)
+@router.get("/me")
 def get_me(
-    db: Session = Depends(get_db),
-    current_user=Depends(__import__(
-        'app.utils.dependencies',
-        fromlist=['get_current_user']
-    ).get_current_user)
+    current_user=Depends(get_current_user)
 ):
-    """Get currently authenticated user details."""
+    """Get current authenticated user details."""
     return create_api_response(
         success=True,
         message="User details fetched",

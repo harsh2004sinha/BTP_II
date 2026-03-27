@@ -4,18 +4,26 @@ from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from apscheduler.schedulers.background import BackgroundScheduler
 import logging
+
 from app.database import create_tables
 from app.config import settings
-from app.routers import auth, plans, upload, weather, results, prediction
 
-# ── Logging ──────────────────────────────────────────────────────────
+# Import routers directly - not from __init__
+from app.routers.auth import router as auth_router
+from app.routers.plans import router as plans_router
+from app.routers.upload import router as upload_router
+from app.routers.weather import router as weather_router
+from app.routers.results import router as results_router
+from app.routers.prediction import router as prediction_router
+
+# ── Logging ──────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 )
 logger = logging.getLogger(__name__)
 
-# ── Scheduler ────────────────────────────────────────────────────────
+# ── Scheduler ────────────────────────────────────────────────
 scheduler = BackgroundScheduler()
 
 
@@ -45,7 +53,7 @@ async def lifespan(app: FastAPI):
     logger.info("Scheduler stopped")
 
 
-# ── App Instance ─────────────────────────────────────────────────────
+# ── App Instance ─────────────────────────────────────────────
 app = FastAPI(
     title="Energy Management System API",
     description="Intelligent Cost-Optimized Energy Management Backend",
@@ -55,25 +63,25 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# ── CORS ─────────────────────────────────────────────────────────────
+# ── CORS ─────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],     # Change to frontend URL in production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ── Routers ──────────────────────────────────────────────────────────
-app.include_router(auth.router)
-app.include_router(plans.router)
-app.include_router(upload.router)
-app.include_router(weather.router)
-app.include_router(results.router)
-app.include_router(prediction.router)
+# ── Include Routers ───────────────────────────────────────────
+app.include_router(auth_router)
+app.include_router(plans_router)
+app.include_router(upload_router)
+app.include_router(weather_router)
+app.include_router(results_router)
+app.include_router(prediction_router)
 
 
-# ── Root ─────────────────────────────────────────────────────────────
+# ── Root Endpoints ────────────────────────────────────────────
 @app.get("/", tags=["Health"])
 def root():
     return {
@@ -86,4 +94,7 @@ def root():
 
 @app.get("/health", tags=["Health"])
 def health_check():
-    return JSONResponse({"status": "healthy", "version": settings.APP_VERSION})
+    return JSONResponse({
+        "status":  "healthy",
+        "version": settings.APP_VERSION
+    })
