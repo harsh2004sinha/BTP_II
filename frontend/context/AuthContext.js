@@ -35,12 +35,12 @@ export function AuthProvider({ children }) {
   }, []);
 
   // ── Login ─────────────────────────────────────────────────────────────────
+  // ── Login (improved error handling) ──────────────────────────────────────
   const login = async (email, password) => {
     try {
       const response = await authAPI.login({ email, password });
       const { access_token, user: userData } = response.data;
 
-      // Save to cookies (7 day expiry)
       Cookies.set("token", access_token, { expires: 7 });
       Cookies.set("user", JSON.stringify(userData), { expires: 7 });
 
@@ -52,14 +52,31 @@ export function AuthProvider({ children }) {
 
       return { success: true };
     } catch (error) {
-      const message =
-        error.response?.data?.detail || "Login failed. Please try again.";
-      toast.error(message);
+      // ── Map HTTP status codes to friendly messages ──────────────────────
+      const status = error.response?.status;
+      const detail = error.response?.data?.detail;
+
+      let message = "Login failed. Please try again.";
+
+      if (status === 401) {
+        message = "Incorrect email or password.";
+      } else if (status === 404) {
+        message = "No account found with this email.";
+      } else if (status === 429) {
+        message = "Too many attempts. Please wait a moment.";
+      } else if (status >= 500) {
+        message = "Server error. Please try again later.";
+      } else if (detail) {
+        message = detail;
+      } else if (!error.response) {
+        message = "Cannot connect to server. Check your connection.";
+      }
+
       return { success: false, message };
     }
   };
 
-  // ── Register ──────────────────────────────────────────────────────────────
+  // ── Register (improved error handling) ───────────────────────────────────
   const register = async (name, email, password) => {
     try {
       await authAPI.register({ name, email, password });
@@ -69,9 +86,23 @@ export function AuthProvider({ children }) {
 
       return { success: true };
     } catch (error) {
-      const message =
-        error.response?.data?.detail || "Registration failed. Try again.";
-      toast.error(message);
+      const status = error.response?.status;
+      const detail = error.response?.data?.detail;
+
+      let message = "Registration failed. Please try again.";
+
+      if (status === 409 || detail?.toLowerCase().includes("already")) {
+        message = "An account with this email already exists.";
+      } else if (status === 422) {
+        message = "Invalid data. Please check your inputs.";
+      } else if (status >= 500) {
+        message = "Server error. Please try again later.";
+      } else if (!error.response) {
+        message = "Cannot connect to server. Check your connection.";
+      } else if (detail) {
+        message = detail;
+      }
+
       return { success: false, message };
     }
   };
