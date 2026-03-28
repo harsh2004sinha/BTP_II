@@ -8,34 +8,29 @@ import logging
 from app.database import create_tables
 from app.config import settings
 
-# Import routers directly - not from __init__
-from app.routers.auth import router as auth_router
-from app.routers.plans import router as plans_router
-from app.routers.upload import router as upload_router
-from app.routers.weather import router as weather_router
-from app.routers.results import router as results_router
+# Import each router file directly
+from app.routers.auth       import router as auth_router
+from app.routers.plans      import router as plans_router
+from app.routers.upload     import router as upload_router
+from app.routers.weather    import router as weather_router
+from app.routers.results    import router as results_router
 from app.routers.prediction import router as prediction_router
 
-# ── Logging ──────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 )
 logger = logging.getLogger(__name__)
 
-# ── Scheduler ────────────────────────────────────────────────
 scheduler = BackgroundScheduler()
 
 
 def scheduled_update():
-    """Runs every 15 minutes to refresh predictions."""
-    logger.info("Scheduler: running periodic prediction update...")
+    logger.info("Scheduler: running periodic update...")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup and shutdown events."""
-    # Startup
     logger.info("Starting Energy Management System...")
     create_tables()
     logger.info("Database tables created/verified")
@@ -46,14 +41,12 @@ async def lifespan(app: FastAPI):
         id='prediction_update'
     )
     scheduler.start()
-    logger.info(f"Scheduler started (every {settings.UPDATE_INTERVAL_MINUTES} min)")
+    logger.info(f"Scheduler started")
     yield
-    # Shutdown
     scheduler.shutdown()
-    logger.info("Scheduler stopped")
+    logger.info("Server stopped")
 
 
-# ── App Instance ─────────────────────────────────────────────
 app = FastAPI(
     title="Energy Management System API",
     description="Intelligent Cost-Optimized Energy Management Backend",
@@ -63,7 +56,6 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# ── CORS ─────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -72,7 +64,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Include Routers ───────────────────────────────────────────
+# Register routers
 app.include_router(auth_router)
 app.include_router(plans_router)
 app.include_router(upload_router)
@@ -81,7 +73,6 @@ app.include_router(results_router)
 app.include_router(prediction_router)
 
 
-# ── Root Endpoints ────────────────────────────────────────────
 @app.get("/", tags=["Health"])
 def root():
     return {

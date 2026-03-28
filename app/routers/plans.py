@@ -1,8 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import List
 from app.database import get_db
-from app.schemas.plan import PlanCreate, PlanResponse, PlanUpdate
+from app.schemas.plan import PlanCreate, PlanUpdate
 from app.models.plan import Plan
 from app.models.user import User
 from app.utils.dependencies import get_current_user
@@ -18,28 +17,16 @@ router = APIRouter(
 )
 
 
-@router.post(
-    "/createPlan",
-    status_code=status.HTTP_201_CREATED,
-    summary="Create a new energy plan"
-)
+@router.post("/createPlan", status_code=status.HTTP_201_CREATED)
 def create_plan(
     plan_data: PlanCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """
-    Create a new energy optimization plan.
-
-    - **budget**: Total budget in your currency
-    - **roofArea**: Available roof area in square meters
-    - **location**: City name or address
-    """
+    """Create a new energy optimization plan."""
     try:
-        # Get coordinates from location
         lat, lon = WeatherService.get_coordinates(plan_data.location)
 
-        # Create plan record
         new_plan = Plan(
             userId    = current_user.id,
             budget    = plan_data.budget,
@@ -53,8 +40,6 @@ def create_plan(
         db.add(new_plan)
         db.commit()
         db.refresh(new_plan)
-
-        logger.info(f"Plan created: {new_plan.planId} for user {current_user.id}")
 
         return create_api_response(
             success=True,
@@ -76,45 +61,45 @@ def create_plan(
         raise
     except Exception as e:
         db.rollback()
-        logger.error(f"Plan creation error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Could not create plan: {str(e)}"
         )
 
 
-@router.get(
-    "/",
-    summary="Get all plans for current user"
-)
+@router.get("/all")
 def get_all_plans(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get all energy plans belonging to the current user."""
+    """Get all plans for current user."""
     try:
         plans = db.query(Plan).filter(
             Plan.userId == current_user.id
         ).order_by(Plan.createdAt.desc()).all()
 
-        plans_list = []
-        for plan in plans:
-            plans_list.append({
-                "planId":    plan.planId,
-                "budget":    plan.budget,
-                "roofArea":  plan.roofArea,
-                "location":  plan.location,
-                "latitude":  plan.latitude,
-                "longitude": plan.longitude,
-                "status":    plan.status,
-                "billFile":  plan.billFile,
-                "createdAt": str(plan.createdAt)
-            })
+        plans_list = [
+            {
+                "planId":    p.planId,
+                "budget":    p.budget,
+                "roofArea":  p.roofArea,
+                "location":  p.location,
+                "latitude":  p.latitude,
+                "longitude": p.longitude,
+                "status":    p.status,
+                "billFile":  p.billFile,
+                "createdAt": str(p.createdAt)
+            }
+            for p in plans
+        ]
 
         return create_api_response(
             success=True,
             message=f"Found {len(plans_list)} plan(s)",
-            data={"plans": plans_list, "total": len(plans_list)}
+            data={
+                "plans": plans_list,
+                "total": len(plans_list)
+            }
         )
 
     except Exception as e:
@@ -124,16 +109,13 @@ def get_all_plans(
         )
 
 
-@router.get(
-    "/{plan_id}",
-    summary="Get specific plan by ID"
-)
+@router.get("/{plan_id}")
 def get_plan(
     plan_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Get details of a specific plan by its ID."""
+    """Get a specific plan by ID."""
     plan = db.query(Plan).filter(
         Plan.planId == plan_id,
         Plan.userId == current_user.id
@@ -164,17 +146,14 @@ def get_plan(
     )
 
 
-@router.put(
-    "/{plan_id}",
-    summary="Update a plan"
-)
+@router.put("/{plan_id}")
 def update_plan(
     plan_id: str,
     plan_data: PlanUpdate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Update budget, roof area or location of existing plan."""
+    """Update an existing plan."""
     plan = db.query(Plan).filter(
         Plan.planId == plan_id,
         Plan.userId == current_user.id
@@ -192,19 +171,22 @@ def update_plan(
         if plan_data.roofArea is not None:
             plan.roofArea = plan_data.roofArea
         if plan_data.location is not None:
-            plan.location = plan_data.location
-            lat, lon = WeatherService.get_coordinates(plan_data.location)
+            plan.location  = plan_data.location
+            lat, lon       = WeatherService.get_coordinates(plan_data.location)
             plan.latitude  = lat
             plan.longitude = lon
 
-        plan.status = "pending"  # Reset status on update
+        plan.status = "pending"
         db.commit()
         db.refresh(plan)
 
         return create_api_response(
             success=True,
             message="Plan updated successfully",
-            data={"planId": plan.planId, "status": plan.status}
+            data={
+                "planId": plan.planId,
+                "status": plan.status
+            }
         )
 
     except Exception as e:
@@ -215,16 +197,13 @@ def update_plan(
         )
 
 
-@router.delete(
-    "/{plan_id}",
-    summary="Delete a plan"
-)
+@router.delete("/{plan_id}")
 def delete_plan(
     plan_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Permanently delete a plan and all its data."""
+    """Delete a plan permanently."""
     plan = db.query(Plan).filter(
         Plan.planId == plan_id,
         Plan.userId == current_user.id
@@ -242,7 +221,7 @@ def delete_plan(
 
         return create_api_response(
             success=True,
-            message=f"Plan '{plan_id}' deleted successfully"
+            message=f"Plan deleted successfully"
         )
 
     except Exception as e:

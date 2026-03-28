@@ -5,6 +5,7 @@ from app.schemas.user import UserRegister, UserLogin
 from app.services.auth_service import AuthService
 from app.utils.dependencies import get_current_user
 from app.utils.helpers import create_api_response
+from app.models.user import User
 
 router = APIRouter(
     prefix="/auth",
@@ -62,7 +63,7 @@ def login(
 
 @router.get("/me")
 def get_me(
-    current_user=Depends(get_current_user)
+    current_user: User = Depends(get_current_user)
 ):
     """Get current authenticated user details."""
     return create_api_response(
