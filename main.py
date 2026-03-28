@@ -1,26 +1,135 @@
 """
 main.py
 =======
-Entry point for testing and demonstrating the full core pipeline.
+Entry point for the Energy Management System.
 
-Runs:
-    1. Models test
-    2. Digital Twin simulation
-    3. Optimizer test
-    4. System sizing
-    5. Explainability test
-    6. Policy test
-    7. Full pipeline (24-hour simulation)
+Serves dual purpose:
+  1. FastAPI application server (import as module or run with uvicorn)
+  2. Core pipeline test suite (run directly with: python main.py)
 
-Run with:
+FastAPI server:
+    uvicorn main:app --reload
+
+Core test suite:
     python main.py
 """
 
 import json
+import logging
 import numpy as np
 
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from apscheduler.schedulers.background import BackgroundScheduler
+
+from app.database import create_tables
+from app.config import settings
+
+# Import each router
+from app.routers.auth       import router as auth_router
+from app.routers.plans      import router as plans_router
+from app.routers.upload     import router as upload_router
+from app.routers.weather    import router as weather_router
+from app.routers.results    import router as results_router
+from app.routers.prediction import router as prediction_router
+
+
 # ============================================================
-# HELPER
+# LOGGING
+# ============================================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+)
+logger = logging.getLogger(__name__)
+
+
+# ============================================================
+# SCHEDULER
+# ============================================================
+
+scheduler = BackgroundScheduler()
+
+
+def scheduled_update():
+    logger.info("Scheduler: running periodic update...")
+
+
+# ============================================================
+# FASTAPI LIFESPAN
+# ============================================================
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Starting Energy Management System...")
+    create_tables()
+    logger.info("Database tables created/verified")
+    scheduler.add_job(
+        scheduled_update,
+        "interval",
+        minutes=settings.UPDATE_INTERVAL_MINUTES,
+        id="prediction_update"
+    )
+    scheduler.start()
+    logger.info("Scheduler started")
+    yield
+    scheduler.shutdown()
+    logger.info("Server stopped")
+
+
+# ============================================================
+# FASTAPI APPLICATION
+# ============================================================
+
+app = FastAPI(
+    title="Energy Management System API",
+    description="Intelligent Cost-Optimized Energy Management Backend",
+    version="1.0.0",
+    lifespan=lifespan,
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Register routers
+app.include_router(auth_router)
+app.include_router(plans_router)
+app.include_router(upload_router)
+app.include_router(weather_router)
+app.include_router(results_router)
+app.include_router(prediction_router)
+
+
+@app.get("/", tags=["Health"])
+def root():
+    return {
+        "app":     settings.APP_NAME,
+        "version": settings.APP_VERSION,
+        "status":  "running",
+        "docs":    "/docs"
+    }
+
+
+@app.get("/health", tags=["Health"])
+def health_check():
+    return JSONResponse({
+        "status":  "healthy",
+        "version": settings.APP_VERSION
+    })
+
+
+# ============================================================
+# TEST SUITE HELPERS
 # ============================================================
 
 def section(title: str):
@@ -31,6 +140,7 @@ def section(title: str):
 
 
 def subsection(title: str):
+    """Print a subsection header."""
     print(f"\n--- {title} ---")
 
 
@@ -84,7 +194,6 @@ def test_models():
     print(f"  Load at 6:00 PM (saturday): {load.load_power(18.0, 'saturday', False):.1f} kW")
     print(f"  Daily energy (weekday)    : {load.get_daily_energy_kwh('weekday'):.1f} kWh")
 
-    # Scaled from bill
     bill_profile = load.from_monthly_bill(monthly_units_kwh=15000.0)
     total_kwh = sum(p["energy_kwh"] for p in bill_profile)
     print(f"  Bill profile (15000 kWh/month): {total_kwh:.1f} kWh/day")
@@ -110,12 +219,11 @@ def test_models():
 def test_digital_twin():
     section("LAYER 2 — DIGITAL TWIN")
 
-    from core.twin.twin_core  import DigitalTwin
-    from core.twin.forecast   import Forecaster
-    from core.models.pv_model  import PVModel
+    from core.twin.twin_core    import DigitalTwin
+    from core.twin.forecast     import Forecaster
+    from core.models.pv_model   import PVModel
     from core.models.load_model import LoadModel
 
-    # Build twin
     twin = DigitalTwin(
         battery_capacity_kwh = 100.0,
         pv_area_m2           = 500.0,
@@ -175,10 +283,10 @@ def test_digital_twin():
 def test_optimizer():
     section("LAYER 3 — OPTIMIZER")
 
-    from core.twin.twin_core    import DigitalTwin
-    from core.optimizer.solver  import Solver
-    from core.optimizer.sizing  import SystemSizer
-    from core.optimizer.scenario import ScenarioGenerator
+    from core.twin.twin_core          import DigitalTwin
+    from core.optimizer.solver        import Solver
+    from core.optimizer.sizing        import SystemSizer
+    from core.optimizer.scenario      import ScenarioGenerator
     from core.optimizer.cost_function import CostFunction
     from core.optimizer.degradation   import DegradationModel
 
@@ -187,7 +295,7 @@ def test_optimizer():
 
     subsection("Single Step Optimization")
     state = twin.twin_step(
-        hour_of_day    = 17.5,   # On-peak period
+        hour_of_day    = 17.5,
         day_type       = "weekday",
         grid_import_kw = 0.0,
         grid_export_kw = 0.0
@@ -212,7 +320,7 @@ def test_optimizer():
 
     subsection("Horizon Optimization (MPC)")
     twin.reset(0.50)
-    state = twin.twin_step(hour_of_day=8.0, day_type="weekday")
+    state    = twin.twin_step(hour_of_day=8.0, day_type="weekday")
     schedule = solver.optimize_horizon(state, forecast=state.forecast)
     print(f"  Schedule steps    : {len(schedule)}")
     print(f"  Actions in plan   :")
@@ -226,10 +334,10 @@ def test_optimizer():
 
     subsection("System Sizing")
     sizer = SystemSizer(
-        solar_price_per_kw   = 1000.0,
-        battery_price_per_kwh= 300.0,
-        grid_price           = 0.15,
-        roof_area_m2         = 1000.0
+        solar_price_per_kw    = 1000.0,
+        battery_price_per_kwh = 300.0,
+        grid_price            = 0.15,
+        roof_area_m2          = 1000.0
     )
     sizing = sizer.run_sizing(
         monthly_kwh       = 15000.0,
@@ -250,11 +358,11 @@ def test_optimizer():
         battery_capacity_kwh = 100.0
     )
     result = deg.degradation_cost(
-        charge_kw    = 30.0,
-        discharge_kw = 0.0,
-        current_soc  = 0.90,
-        dt_hours     = 0.25,
-        temperature_c= 35.0
+        charge_kw     = 30.0,
+        discharge_kw  = 0.0,
+        current_soc   = 0.90,
+        dt_hours      = 0.25,
+        temperature_c = 35.0
     )
     print(f"  Degradation at SOC=0.90, T=35°C, 30kW charge:")
     print(f"  Cost           : ${result['degradation_cost']:.6f}")
@@ -263,7 +371,7 @@ def test_optimizer():
     print(f"  Temp stress    : {result['temp_stress_factor']:.4f}")
 
     subsection("Scenario Generator")
-    gen  = ScenarioGenerator(n_scenarios=5)
+    gen = ScenarioGenerator(n_scenarios=5)
     twin.reset(0.5)
     state = twin.twin_step(hour_of_day=9.0)
     if state.forecast:
@@ -343,12 +451,12 @@ def test_policy():
         "max_battery_cycles_day" : 1.5,
         "export_blackout_hours"  : [22, 23, 0, 1]
     })
-    print(f"\n  Updated rules: {list(update['validated'].keys())}")
-    print(f"  Rejected rules: {list(update['rejected'].keys())}")
+    print(f"\n  Updated rules   : {list(update['validated'].keys())}")
+    print(f"  Rejected rules  : {list(update['rejected'].keys())}")
 
     subsection("Policy Manager — Full Evaluation")
-    twin    = DigitalTwin(pv_area_m2=500.0, battery_capacity_kwh=100.0)
-    policy  = PolicyManager()
+    twin   = DigitalTwin(pv_area_m2=500.0, battery_capacity_kwh=100.0)
+    policy = PolicyManager()
 
     state = twin.twin_step(
         hour_of_day    = 18.0,
@@ -380,9 +488,9 @@ def test_policy():
 def test_explainability():
     section("LAYER 5 — EXPLAINABILITY")
 
-    from core.explain.explain_core  import ExplainCore
-    from core.twin.twin_core        import DigitalTwin
-    from core.optimizer.solver      import Solver
+    from core.explain.explain_core import ExplainCore
+    from core.twin.twin_core       import DigitalTwin
+    from core.optimizer.solver     import Solver
 
     twin    = DigitalTwin(pv_area_m2=500.0, battery_capacity_kwh=100.0)
     solver  = Solver()
@@ -399,10 +507,10 @@ def test_explainability():
             explanation    = explain.explain(state, best, cost_breakdown)
 
             print(f"\n  Hour {hour}:")
-            print(f"  Action : {explanation['action_name']}")
-            print(f"  Decision: {explanation['decision']}")
-            print(f"  Reason  : {explanation['reason'][:80]}...")
-            print(f"  Top factor: {explanation['top_factor']}")
+            print(f"  Action      : {explanation['action_name']}")
+            print(f"  Decision    : {explanation['decision']}")
+            print(f"  Reason      : {explanation['reason'][:80]}...")
+            print(f"  Top factor  : {explanation['top_factor']}")
             print(f"  Cost summary: {explanation['cost_summary']}")
 
     subsection("Action Frequency")
@@ -418,7 +526,49 @@ def test_explainability():
 
 
 # ============================================================
-# 6. FULL PIPELINE — 24 HOUR SIMULATION
+# 6. RL AGENT TEST
+# ============================================================
+
+def test_rl_agent():
+    section("LAYER 4 — RL AGENT (Rule-Based Fallback)")
+
+    from core.learning.rl_agent import RLAgent
+    from core.learning.rl_env   import MicrogridEnv
+    from core.twin.twin_core    import DigitalTwin
+    from core.optimizer.solver  import Solver
+    from core.learning.reward   import RewardFunction
+
+    twin      = DigitalTwin(battery_capacity_kwh=100.0, pv_area_m2=500.0)
+    solver    = Solver()
+    reward_fn = RewardFunction()
+    env       = MicrogridEnv(twin=twin, solver=solver, reward_fn=reward_fn, n_steps=8)
+    agent     = RLAgent(env=env)
+
+    subsection("Rule-Based Action Prediction")
+    obs, _ = env.reset()
+    total_reward = 0.0
+
+    for step in range(8):
+        action      = agent.predict_action(env.current_state)
+        adjustments = agent.get_weight_adjustments(env.current_state)
+        obs, reward, terminated, truncated, info = env.step(action)
+        total_reward += reward
+
+        print(f"  Step {step}: "
+              f"SOC={env.current_state.soc:.2%} | "
+              f"Action={info['action_name']:20s} | "
+              f"Reward={reward:.4f} | "
+              f"Source={adjustments['source']}")
+
+        if terminated or truncated:
+            break
+
+    print(f"\n  Total reward (8 steps): {total_reward:.4f}")
+    print(f"  Episode cost          : ${info['episode_cost']:.4f}")
+
+
+# ============================================================
+# 7. FULL PIPELINE — 24 HOUR SIMULATION
 # ============================================================
 
 def test_full_pipeline():
@@ -429,8 +579,7 @@ def test_full_pipeline():
     from core.explain.explain_core  import ExplainCore
     from core.policy.policy_manager import PolicyManager
 
-    # Build all layers
-    twin    = DigitalTwin(
+    twin = DigitalTwin(
         battery_capacity_kwh = 100.0,
         pv_area_m2           = 500.0,
         base_load_kw         = 200.0,
@@ -442,14 +591,13 @@ def test_full_pipeline():
     explain = ExplainCore()
     policy  = PolicyManager()
 
-    # Tracking
-    dt_hours    = 0.25
-    n_steps     = 96    # 24 hours × 4 steps/hour
-    results     = []
-    total_cost  = 0.0
-    total_solar = 0.0
-    total_import= 0.0
-    total_export= 0.0
+    dt_hours     = 0.25
+    n_steps      = 96       # 24 hours × 4 steps/hour
+    results      = []
+    total_cost   = 0.0
+    total_solar  = 0.0
+    total_import = 0.0
+    total_export = 0.0
 
     print("\n  Running 96-step simulation...")
     print(f"  {'Step':>4} | {'Hour':>5} | {'SOC':>6} | "
@@ -461,9 +609,9 @@ def test_full_pipeline():
 
         # 1. Get twin state
         state = twin.twin_step(
-            hour_of_day    = hour,
-            day_type       = "weekday",
-            cloud_factor   = 0.85
+            hour_of_day  = hour,
+            day_type     = "weekday",
+            cloud_factor = 0.85
         )
 
         # 2. Optimize
@@ -482,9 +630,8 @@ def test_full_pipeline():
         cost_bd = best_action.get("cost_breakdown", {})
         exp     = explain.explain(state, best_action, cost_bd)
 
-        # 5. Apply final action to twin (next step)
-        # (In real system: send commands to hardware)
-        step_cost = cost_bd.get("total_cost", 0.0)
+        # 5. Accumulate metrics
+        step_cost     = cost_bd.get("total_cost", 0.0)
         total_cost   += step_cost
         total_solar  += state.pv_power_kw * dt_hours
         total_import += final_action.get("grid_import_kw", 0.0) * dt_hours
@@ -521,9 +668,11 @@ def test_full_pipeline():
     print(f"  Total solar used : {total_solar:.2f} kWh")
     print(f"  Total grid import: {total_import:.2f} kWh")
     print(f"  Total grid export: {total_export:.2f} kWh")
-    print(f"  Solar fraction   : "
-          f"{total_solar/(total_solar+total_import)*100:.1f}%"
-          if (total_solar + total_import) > 0 else "  Solar fraction: N/A")
+    if (total_solar + total_import) > 0:
+        print(f"  Solar fraction   : "
+              f"{total_solar / (total_solar + total_import) * 100:.1f}%")
+    else:
+        print("  Solar fraction   : N/A")
     print(f"  Final SOC        : {results[-1]['soc']:.1%}")
 
     carbon_summary = policy.get_carbon_summary()
@@ -540,49 +689,7 @@ def test_full_pipeline():
 
 
 # ============================================================
-# 7. RL AGENT TEST (Quick)
-# ============================================================
-
-def test_rl_agent():
-    section("LAYER 4 — RL AGENT (Rule-Based Fallback)")
-
-    from core.learning.rl_agent import RLAgent
-    from core.learning.rl_env   import MicrogridEnv
-    from core.twin.twin_core    import DigitalTwin
-    from core.optimizer.solver  import Solver
-    from core.learning.reward   import RewardFunction
-
-    twin      = DigitalTwin(battery_capacity_kwh=100.0, pv_area_m2=500.0)
-    solver    = Solver()
-    reward_fn = RewardFunction()
-    env       = MicrogridEnv(twin=twin, solver=solver, reward_fn=reward_fn, n_steps=8)
-    agent     = RLAgent(env=env)
-
-    subsection("Rule-Based Action Prediction")
-    obs, _ = env.reset()
-    total_reward = 0.0
-
-    for step in range(8):
-        action = agent.predict_action(env.current_state)
-        adjustments = agent.get_weight_adjustments(env.current_state)
-        obs, reward, terminated, truncated, info = env.step(action)
-        total_reward += reward
-
-        print(f"  Step {step}: "
-              f"SOC={env.current_state.soc:.2%} | "
-              f"Action={info['action_name']:20s} | "
-              f"Reward={reward:.4f} | "
-              f"Source={adjustments['source']}")
-
-        if terminated or truncated:
-            break
-
-    print(f"\n  Total reward (8 steps): {total_reward:.4f}")
-    print(f"  Episode cost          : ${info['episode_cost']:.4f}")
-
-
-# ============================================================
-# MAIN
+# MAIN — TEST SUITE ENTRY POINT
 # ============================================================
 
 if __name__ == "__main__":
