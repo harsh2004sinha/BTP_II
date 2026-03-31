@@ -7,7 +7,7 @@ import { predictionApi } from "@/lib/predictionApi";
 import { plansApi } from "@/lib/plansApi";
 import { PredictionChart } from "@/components/charts/PredictionChart";
 import { SolarOutputChart } from "@/components/charts/SolarOutputChart";
-import { getErrorMessage, formatNumber } from "@/lib/utils";
+import { getErrorMessage, formatNumber, formatCurrency } from "@/lib/utils";
 import toast from "react-hot-toast";
 import {
   Activity, RefreshCw, ChevronLeft, Sun,
@@ -149,7 +149,7 @@ function HourRow({ pred, isNow }) {
         </div>
       </td>
       <td className="px-4 py-3 text-sm text-rose-300 font-medium">
-        RM {formatNumber(pred.gridCost, 3)}
+        ₹ {formatNumber(pred.gridCost, 3)}
       </td>
       <td className="px-4 py-3 text-sm text-slate-300">
         {formatNumber(pred.consumption)} kW
@@ -448,7 +448,7 @@ export default function PredictionPage() {
           <LiveMetric
             icon={TrendingDown}
             label="Total Grid Cost"
-            value={`RM ${formatNumber(totalCost, 2)}`}
+            value={formatCurrency(totalCost)}
             color="rose"
             subLabel="Estimated for today"
           />
