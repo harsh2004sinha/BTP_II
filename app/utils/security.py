@@ -1,28 +1,37 @@
 from datetime import datetime, timedelta
 from typing import Optional
+import bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from app.config import settings
 
-# Password hashing context
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def _password_bytes_bcrypt(password: str) -> bytes:
+    """Bcrypt accepts at most 72 bytes; truncate on UTF-8 boundaries."""
+    if not isinstance(password, str):
+        raise TypeError("password must be a string")
+    raw = password.encode("utf-8")
+    if len(raw) <= 72:
+        return raw
+    return raw[:72]
 
 
 def hash_password(password: str) -> str:
-    """Hash a plain text password - max 72 chars for bcrypt"""
-    # Truncate to 72 bytes (bcrypt limit)
-    password_bytes = password.encode('utf-8')
-    if len(password_bytes) > 72:
-        password = password[:72]
-    return pwd_context.hash(password)
+    """Hash a plain text password (bcrypt, 72-byte limit)."""
+    pw = _password_bytes_bcrypt(password)
+    return bcrypt.hashpw(pw, bcrypt.gensalt()).decode("ascii")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify plain password against hashed password"""
-    # Apply same truncation for verification
-    if len(plain_password.encode('utf-8')) > 72:
-        plain_password = plain_password[:72]
-    return pwd_context.verify(plain_password, hashed_password)
+    """Verify plain password against a bcrypt hash string."""
+    try:
+        pw = _password_bytes_bcrypt(plain_password)
+        h = hashed_password.encode("ascii")
+    except (TypeError, UnicodeEncodeError, AttributeError):
+        return False
+    try:
+        return bcrypt.checkpw(pw, h)
+    except ValueError:
+        return False
 
 
 def create_access_token(

@@ -70,12 +70,7 @@ export default function LoginPage() {
         }
       }
     } catch (err) {
-      const message =
-        err?.response?.data?.detail ||
-        err?.response?.data?.message ||
-        err?.message ||
-        "Something went wrong";
-      toast.error(message);
+      toast.error(getErrorMessage(err));
     } finally {
       setSubmitting(false);
     }

@@ -8,8 +8,11 @@ from app.utils.dependencies import get_current_user
 from app.utils.helpers import create_api_response, save_upload_file, validate_file_extension
 from app.services.bill_parser import BillParser
 from app.config import settings
+from typing import List, Optional
+from pydantic import BaseModel
 import logging
 import os
+import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +212,15 @@ def get_consumption(
     )
 
 
+
+class MonthlyDataItem(BaseModel):
+    month: str    # e.g. "Jan"
+    units: float  # kWh
+
+class ManualConsumptionBody(BaseModel):
+    monthly_data: Optional[List[MonthlyDataItem]] = None
+
+
 @router.post(
     "/manual/{plan_id}",
     summary="Manually enter consumption data"
@@ -217,14 +229,16 @@ def add_manual_consumption(
     plan_id: str,
     monthly_units: float,
     pattern: str = "flat",
+    body: ManualConsumptionBody = ManualConsumptionBody(),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
     Manually enter annual consumption if no bill available.
 
-    - **monthly_units**: Average monthly kWh usage
-    - **pattern**: flat or seasonal distribution
+    - **monthly_units**: Average monthly kWh (fallback)
+    - **pattern**: flat or seasonal distribution (fallback)
+    - **body.monthly_data**: Optional 12-month [{month, units}] list (preferred)
     """
     plan = db.query(Plan).filter(
         Plan.planId == plan_id,
@@ -238,34 +252,58 @@ def add_manual_consumption(
         )
 
     try:
-        annual_total = monthly_units * 12
-        records = BillParser.estimate_monthly_consumption(annual_total, pattern)
+        # --- Build records ---
+        current_year = datetime.datetime.now().year
+
+        if body.monthly_data and len(body.monthly_data) > 0:
+            # Use the actual per-month values supplied by the user
+            month_map = {
+                "jan": 1, "feb": 2, "mar": 3, "apr": 4,
+                "may": 5, "jun": 6, "jul": 7, "aug": 8,
+                "sep": 9, "oct": 10, "nov": 11, "dec": 12
+            }
+            records = []
+            for item in body.monthly_data:
+                mon = item.month[:3].lower()
+                mon_num = month_map.get(mon, 1)
+                records.append({
+                    "month": item.month[:3],
+                    "year" : current_year,
+                    "units": float(item.units),
+                    "date" : f"{current_year}-{mon_num:02d}-01"
+                })
+        else:
+            # Fallback: estimate from average
+            annual_total = monthly_units * 12
+            records = BillParser.estimate_monthly_consumption(annual_total, pattern)
 
         # Clear old records
         db.query(ConsumptionData).filter(
             ConsumptionData.planId == plan_id
         ).delete()
 
-        # Save new records
+        # Save records
         for r in records:
-            consumption = ConsumptionData(
-                planId = plan_id,
-                month  = r['month'],
-                year   = r['year'],
-                units  = r['units'],
-                date   = r['date']
-            )
-            db.add(consumption)
+            if float(r.get("units", 0)) > 0:
+                consumption = ConsumptionData(
+                    planId = plan_id,
+                    month  = r["month"],
+                    year   = r["year"],
+                    units  = float(r["units"]),
+                    date   = r["date"]
+                )
+                db.add(consumption)
 
         plan.status = "bill_uploaded"
         db.commit()
 
+        annual_total = sum(float(r.get("units", 0)) for r in records)
         return create_api_response(
             success=True,
             message=f"Manual consumption data saved ({len(records)} months)",
             data={
                 "planId":       plan_id,
-                "totalAnnual":  annual_total,
+                "totalAnnual":  round(annual_total, 1),
                 "recordsSaved": len(records),
                 "preview":      records[:3]
             }
@@ -276,4 +314,4 @@ def add_manual_consumption(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Could not save consumption data: {str(e)}"
-        )
+        )

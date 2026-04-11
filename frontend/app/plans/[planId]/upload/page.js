@@ -150,20 +150,54 @@ function FilePreview({ file, progress, onRemove }) {
   );
 }
 
-/* ── manual entry form ───────────────────────────────────────────────────── */
+/* ── manual entry form: 12 monthly inputs ───────────────────────────────── */
+const MONTH_NAMES = [
+  "January","February","March","April","May","June",
+  "July","August","September","October","November","December",
+];
+
+// Typical Indian household seasonal multipliers (relative)
+const SEASONAL_FACTORS = [0.85, 0.78, 0.94, 1.15, 1.32, 1.24,
+                           1.10, 1.08, 1.03, 0.91, 0.82, 0.88];
+
 function ManualEntry({ planId, onSuccess }) {
-  const [units, setUnits]       = useState("");
-  const [pattern, setPattern]   = useState("flat");
+  const initMonths = () => MONTH_NAMES.map((m) => ({ month: m, units: "" }));
+  const [months, setMonths] = useState(initMonths());
+  const [avgInput, setAvgInput] = useState("");
   const [saving, setSaving]     = useState(false);
 
+  /* Fill all months from a single average */
+  function fillFromAvg() {
+    const avg = Number(avgInput);
+    if (!avg || avg < 1) { toast.error("Enter a valid average kWh"); return; }
+    setMonths(MONTH_NAMES.map((m, i) => ({
+      month: m,
+      units: Math.round(avg * SEASONAL_FACTORS[i]).toString(),
+    })));
+  }
+
+  function setMonth(i, val) {
+    setMonths((prev) => prev.map((m, idx) => idx === i ? { ...m, units: val } : m));
+  }
+
+  const total   = months.reduce((s, m) => s + (Number(m.units) || 0), 0);
+  const average = months.filter((m) => m.units).length
+    ? Math.round(total / months.filter((m) => m.units).length) : 0;
+
   async function handleSave() {
-    const n = Number(units);
-    if (!n || n < 1) { toast.error("Enter a valid monthly kWh"); return; }
+    const filled = months.filter((m) => m.units && Number(m.units) > 0);
+    if (filled.length < 1) { toast.error("Enter at least one month's consumption"); return; }
+
     setSaving(true);
     try {
-      const res = await uploadApi.addManualConsumption(planId, n, pattern);
+      // Build monthly_data array for backend
+      const monthlyData = months.map((m) => ({
+        month: m.month.substring(0, 3), // "Jan", "Feb"…
+        units: Number(m.units) || 0,
+      }));
+      const res = await uploadApi.addManualConsumption(planId, average, "seasonal", monthlyData);
       if (res.success) {
-        toast.success("Manual data saved!");
+        toast.success("Monthly data saved!");
         onSuccess(res.data);
       }
     } catch (err) {
@@ -174,70 +208,101 @@ function ManualEntry({ planId, onSuccess }) {
   }
 
   return (
-    <div className="rounded-2xl border border-slate-700 bg-slate-800/40 p-5 space-y-4">
+    <div className="rounded-2xl border border-slate-700 bg-slate-800/40 p-5 space-y-5">
       <div className="flex items-center gap-2 mb-1">
         <Keyboard className="w-4 h-4 text-slate-400" />
-        <p className="text-sm font-semibold text-slate-200">
-          Enter Manually Instead
-        </p>
+        <p className="text-sm font-semibold text-slate-200">Enter Monthly Consumption</p>
       </div>
       <p className="text-xs text-slate-500">
-        Don&apos;t have a bill file? Enter your average monthly usage and we&apos;ll
-        estimate annual consumption.
+        Enter your monthly electricity usage (kWh) for each month.
+        Use the quick-fill below if you only know the average.
       </p>
 
-      <div>
-        <label className="text-xs font-medium text-slate-400 mb-1.5 block">
-          Average Monthly Usage (kWh)
-        </label>
-        <input
-          type="number"
-          value={units}
-          onChange={(e) => setUnits(e.target.value)}
-          placeholder="e.g. 400"
-          min="1"
-          className="w-full px-4 py-2.5 rounded-xl bg-slate-800 border
-                     border-slate-700 text-sm text-slate-100 placeholder-slate-600
-                     focus:outline-none focus:ring-2 focus:ring-emerald-500/30
-                     focus:border-emerald-500/50 transition-all"
-        />
+      {/* Quick-fill from average */}
+      <div className="rounded-xl border border-slate-700 bg-slate-900/40 p-3 space-y-2">
+        <p className="text-xs font-medium text-slate-400">
+          Quick-fill from average monthly usage
+        </p>
+        <div className="flex gap-2">
+          <input
+            type="number"
+            value={avgInput}
+            onChange={(e) => setAvgInput(e.target.value)}
+            placeholder="e.g. 330 kWh"
+            min="1"
+            className="flex-1 px-3 py-2 rounded-lg bg-slate-800 border border-slate-700
+                       text-sm text-slate-100 placeholder-slate-600
+                       focus:outline-none focus:ring-2 focus:ring-emerald-500/30 transition-all"
+          />
+          <button
+            type="button"
+            onClick={fillFromAvg}
+            className="px-4 py-2 rounded-lg bg-emerald-500/20 border border-emerald-500/30
+                       text-emerald-400 text-xs font-semibold hover:bg-emerald-500/30 transition-all"
+          >
+            Auto-fill
+          </button>
+        </div>
+        <p className="text-xs text-slate-600">
+          Applies seasonal variation (summer peaks, winter dips) automatically.
+        </p>
       </div>
 
-      <div>
-        <label className="text-xs font-medium text-slate-400 mb-1.5 block">
-          Distribution Pattern
-        </label>
-        <div className="flex gap-2">
-          {["flat", "seasonal"].map((p) => (
-            <button
-              key={p}
-              type="button"
-              onClick={() => setPattern(p)}
-              className={`flex-1 py-2 rounded-xl text-xs font-medium border
-                          transition-all capitalize
-                          ${pattern === p
-                            ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-400"
-                            : "bg-slate-800 border-slate-700 text-slate-400"
-                          }`}
-            >
-              {p}
-            </button>
-          ))}
-        </div>
+      {/* 12-month grid */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        {months.map((m, i) => (
+          <div key={m.month}>
+            <label className="text-xs font-medium text-slate-500 mb-1 block">
+              {m.month}
+            </label>
+            <div className="relative">
+              <input
+                type="number"
+                value={m.units}
+                onChange={(e) => setMonth(i, e.target.value)}
+                placeholder="kWh"
+                min="0"
+                className="w-full px-3 pr-10 py-2 rounded-lg bg-slate-800 border
+                           border-slate-700 text-sm text-slate-100 placeholder-slate-600
+                           focus:outline-none focus:ring-2 focus:ring-emerald-500/30
+                           focus:border-emerald-500/50 transition-all"
+              />
+              <span className="absolute right-2.5 top-1/2 -translate-y-1/2
+                               text-xs text-slate-600 pointer-events-none">
+                kWh
+              </span>
+            </div>
+          </div>
+        ))}
       </div>
+
+      {/* Summary row */}
+      {total > 0 && (
+        <div className="flex gap-4 rounded-xl bg-slate-900/60 border border-slate-700/50 p-3">
+          <div className="text-center flex-1">
+            <p className="text-xs text-slate-500">Annual Total</p>
+            <p className="text-sm font-bold text-slate-200">{total.toLocaleString()} kWh</p>
+          </div>
+          <div className="text-center flex-1 border-l border-slate-700/50">
+            <p className="text-xs text-slate-500">Monthly Avg</p>
+            <p className="text-sm font-bold text-emerald-400">{average} kWh</p>
+          </div>
+        </div>
+      )}
 
       <button
         onClick={handleSave}
-        disabled={saving || !units}
-        className="w-full py-2.5 rounded-xl bg-slate-700 hover:bg-slate-600
-                   text-slate-200 text-sm font-medium transition-all
+        disabled={saving || total === 0}
+        className="w-full py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-600
+                   text-white text-sm font-semibold transition-all
                    disabled:opacity-50 disabled:cursor-not-allowed"
       >
-        {saving ? "Saving…" : "Save Manual Data"}
+        {saving ? "Saving…" : "Save & Continue to Optimization →"}
       </button>
     </div>
   );
 }
+
 
 /* ══════════════════════════════════════════════════════════════════════════ */
 export default function UploadBillPage() {

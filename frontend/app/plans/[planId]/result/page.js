@@ -143,8 +143,11 @@ export default function ResultPage() {
         if (resResult.success) {
           if (resResult.data?.status === "processing") {
             setPolling(true);
-          } else {
+          } else if (resResult.data?.status === "completed") {
             setResult(resResult.data);
+            setPolling(false);
+          } else {
+            setResult(null);
             setPolling(false);
           }
         }
@@ -169,12 +172,17 @@ export default function ResultPage() {
     const id = setInterval(async () => {
       try {
         const res = await resultsApi.getResult(planId);
-        if (res.success && res.data?.status !== "processing") {
+        if (res.success && res.data?.status === "completed") {
           setResult(res.data);
           setPlan((prev) => prev ? { ...prev, status: res.data.status } : prev);
           setPolling(false);
           clearInterval(id);
           toast.success("Optimization complete! 🎉");
+        } else if (res.success && res.data?.status === "failed") {
+          setPolling(false);
+          setPlan((prev) => prev ? { ...prev, status: "failed" } : prev);
+          clearInterval(id);
+          toast.error("Optimization failed. Try again or check server logs.");
         }
       } catch { /* still running */ }
     }, 4000);

@@ -7,6 +7,7 @@ from app.models.user import User
 from app.utils.dependencies import get_current_user
 from app.utils.helpers import create_api_response
 from app.services.weather_service import WeatherService
+from app.algorithm.core_bridge import clear_pipeline
 import logging
 
 logger = logging.getLogger(__name__)
@@ -218,6 +219,7 @@ def delete_plan(
     try:
         db.delete(plan)
         db.commit()
+        clear_pipeline(plan_id)
 
         return create_api_response(
             success=True,

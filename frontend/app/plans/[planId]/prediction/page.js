@@ -26,10 +26,22 @@ const ACTION_CONFIG = {
     dot:   "bg-amber-400",
     icon:  Sun,
   },
+  solar_direct: {
+    label: "Use Solar",
+    color: "bg-amber-500/20 border-amber-500/30 text-amber-300",
+    dot:   "bg-amber-400",
+    icon:  Sun,
+  },
   charge_battery: {
     label: "Charging Battery",
     color: "bg-purple-500/20 border-purple-500/30 text-purple-300",
     dot:   "bg-purple-400",
+    icon:  Battery,
+  },
+  use_battery: {
+    label: "Using Battery",
+    color: "bg-violet-500/20 border-violet-500/30 text-violet-300",
+    dot:   "bg-violet-400",
     icon:  Battery,
   },
   use_grid: {
@@ -268,7 +280,9 @@ export default function PredictionPage() {
   /* ── derive today's totals ──────────────────────────────────────────── */
   const totalSolar  = predictions.reduce((s, p) => s + (p.solar_kW || 0), 0);
   const totalCost   = predictions.reduce((s, p) => s + (p.gridCost || 0), 0);
-  const peakSolar   = Math.max(...predictions.map((p) => p.solar_kW || 0));
+  const peakSolar   = predictions.length
+    ? Math.max(...predictions.map((p) => p.solar_kW || 0))
+    : 0;
   const avgBattery  = predictions.length
     ? predictions.reduce((s, p) => s + (p.batterySOC || 0), 0) / predictions.length
     : 0;

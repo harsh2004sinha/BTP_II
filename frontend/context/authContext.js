@@ -9,6 +9,7 @@ import {
 } from "react";
 import Cookies from "js-cookie";
 import { authApi } from "@/lib/authApi";
+import { getErrorMessage } from "@/lib/utils";
 
 const AuthContext = createContext(null);
 
@@ -91,13 +92,7 @@ export function AuthProvider({ children }) {
     } catch (err) {
       console.error("Login error:", err);
 
-      const message =
-        err?.response?.data?.detail ||
-        err?.response?.data?.message ||
-        err?.message ||
-        "Login failed";
-
-      return { success: false, message };
+      return { success: false, message: getErrorMessage(err) };
     }
   }, []);
 
@@ -107,12 +102,7 @@ export function AuthProvider({ children }) {
       const res = await authApi.register({ name, email, password });
       return res;
     } catch (err) {
-      const message =
-        err?.response?.data?.detail ||
-        err?.response?.data?.message ||
-        err?.message ||
-        "Registration failed";
-      return { success: false, message };
+      return { success: false, message: getErrorMessage(err) };
     }
   }, []);
 

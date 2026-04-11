@@ -37,9 +37,43 @@ export function formatNumber(value, decimals = 1) {
   return Number(value).toFixed(decimals);
 }
 
+/**
+ * Human-readable API/axios error for toasts and UI.
+ * FastAPI validation errors use `detail` as string | {msg} | Array<{msg}>.
+ */
 export function getErrorMessage(error) {
-  if (error?.response?.data?.detail)  return error.response.data.detail;
-  if (error?.response?.data?.message) return error.response.data.message;
-  if (error?.message)                 return error.message;
+  const data = error?.response?.data;
+  const detail = data?.detail;
+
+  if (detail != null) {
+    if (typeof detail === "string") return detail;
+    if (Array.isArray(detail)) {
+      const parts = detail
+        .map((item) => {
+          if (item == null) return null;
+          if (typeof item === "string") return item;
+          if (typeof item.msg === "string") return item.msg;
+          try {
+            return JSON.stringify(item);
+          } catch {
+            return String(item);
+          }
+        })
+        .filter(Boolean);
+      if (parts.length) return parts.join("; ");
+    }
+    if (typeof detail === "object" && typeof detail.msg === "string") {
+      return detail.msg;
+    }
+  }
+
+  if (data?.message != null && typeof data.message === "string") {
+    return data.message;
+  }
+
+  if (error?.message && typeof error.message === "string") {
+    return error.message;
+  }
+
   return "Something went wrong";
 }

@@ -265,29 +265,15 @@ class CorePipeline:
         Get best action for current moment.
         Called every 15 minutes by scheduler.
 
-        Args:
-            current_data = {
-                "hour_of_day"    : 14.5,     # current hour
-                "day_type"       : "weekday",
-                "soc"            : 0.65,     # current battery SOC
-                "pv_actual_kw"   : 85.3,     # actual solar right now
-                "load_actual_kw" : 650.0,    # actual load right now
-                "cloud_factor"   : 0.9,      # 0=cloudy, 1=clear
-                # Optional overrides
-                "grid_price"     : 0.12      # constant grid price
-            }
+        CLOSED-LOOP ARCHITECTURE:
+          1. Read current real-time inputs (hour, cloud, pv_actual, load_actual).
+          2. Apply PREVIOUS optimizer action's charge/discharge to update battery SOC.
+          3. Run Digital Twin to get full state (PV, load, SOC, forecasts).
+          4. Run Optimizer on that state to get best action.
+          5. Return the decision — next call will apply it to battery first.
 
-        Returns:
-            dict with:
-                action_name     : "battery_discharge"
-                charge_kw       : 0.0
-                discharge_kw    : 30.0
-                grid_import_kw  : 150.0
-                grid_export_kw  : 0.0
-                total_cost      : 0.0021
-                explanation     : "Battery discharged because..."
-                soc_after       : 0.62
-                predicted_costs : [...next 4 hours...]
+        This ensures SOC only changes when the optimizer actually commands
+        charge/discharge, not due to phantom noise or out-of-order calls.
         """
 
         if self.twin is None:
@@ -296,64 +282,78 @@ class CorePipeline:
                 "action" : "grid_only"
             }
 
-        hour      = current_data.get("hour_of_day", 12.0)
-        day_type  = current_data.get("day_type", "weekday")
-        soc       = current_data.get("soc", None)
-        pv_actual = current_data.get("pv_actual_kw", None)
-        load_act  = current_data.get("load_actual_kw", None)
-        cloud     = current_data.get("cloud_factor", 1.0)
-        grid_price= current_data.get("grid_price", None)
+        hour       = float(current_data.get("hour_of_day", 12.0))
+        day_type   = current_data.get("day_type", "weekday")
+        soc        = current_data.get("soc", None)
+        pv_actual  = current_data.get("pv_actual_kw", None)
+        load_act   = current_data.get("load_actual_kw", None)
+        cloud      = float(current_data.get("cloud_factor", 1.0))
+        grid_price = current_data.get("grid_price", None)
 
-        # Reset SOC if provided from real sensor
+        # ── Step 1: Apply the LAST optimizer decision to the battery ──────
+        # These are the actual commands that were decided last timestep.
+        # They now actually move the SOC.
+        last = getattr(self, "_last_action", {})
+        prev_charge    = float(last.get("charge_kw",    0.0))
+        prev_discharge = float(last.get("discharge_kw", 0.0))
+
+        # If a real sensor SOC reading is provided, it overrides simulation
         if soc is not None:
             self.twin.battery.soc = float(soc)
+            # Also reset estimator to match
+            self.twin.estimator.reset(initial_soc=float(soc))
+            prev_charge    = 0.0   # don't double-apply
+            prev_discharge = 0.0
 
-        # Get twin state
+        # ── Step 2: Advance Digital Twin with last action's battery cmds ──
         state = self.twin.twin_step(
             hour_of_day    = hour,
             day_type       = day_type,
             irradiance     = self._cloud_to_irradiance(hour, cloud),
             grid_price     = grid_price,
-            cloud_factor   = cloud
+            cloud_factor   = cloud,
+            charge_kw      = prev_charge,     # ← feeds back last decision
+            discharge_kw   = prev_discharge,  # ← feeds back last decision
         )
 
-        # Override with actual sensor readings if provided
+        # ── Step 3: Override with real sensor readings if available ───────
         if pv_actual is not None:
-            state.pv_power_kw    = float(pv_actual)
+            state.pv_power_kw     = float(pv_actual)
             state.pv_available_kw = float(pv_actual)
         if load_act is not None:
             state.load_kw = float(load_act)
 
-        # Optimize
+        # ── Step 4: Run optimizer on this state ───────────────────────────
         opt_result  = self.solver.optimize(state)
         best_action = opt_result.get("best_action", {})
 
-        # Policy check
-        pol_result  = self.policy.evaluate(
+        # Store this decision so next call can apply it to battery
+        self._last_action = best_action
+
+        # ── Step 5: Policy + Explain ──────────────────────────────────────
+        pol_result   = self.policy.evaluate(
             state       = state,
             action      = best_action,
             cycle_count = state.cycle_count
         )
         final_action = pol_result["final_action"]
 
-        # Explain
-        cost_bd      = best_action.get("cost_breakdown", {})
-        explanation  = self.explainer.explain(state, best_action, cost_bd)
+        cost_bd     = best_action.get("cost_breakdown", {})
+        explanation = self.explainer.explain(state, best_action, cost_bd)
 
-        # Next 4 hours cost prediction
         predicted_costs = self._predict_next_hours(state, n_hours=4)
 
         return {
             # Main decision
             "action_name"    : best_action.get("action_name", "grid_only"),
             "description"    : best_action.get("description", ""),
-            "charge_kw"      : final_action.get("charge_kw",     0.0),
-            "discharge_kw"   : final_action.get("discharge_kw",  0.0),
+            "charge_kw"      : final_action.get("charge_kw",      0.0),
+            "discharge_kw"   : final_action.get("discharge_kw",   0.0),
             "grid_import_kw" : final_action.get("grid_import_kw", 0.0),
             "grid_export_kw" : final_action.get("grid_export_kw", 0.0),
             "pv_used_kw"     : state.pv_power_kw,
 
-            # Current state
+            # Current state (AFTER applying last action to battery)
             "current_soc"    : round(state.soc, 4),
             "current_pv_kw"  : round(state.pv_power_kw, 2),
             "current_load_kw": round(state.load_kw, 2),
@@ -381,6 +381,7 @@ class CorePipeline:
             "tariff_period"  : pol_result.get("tariff_period", ""),
             "rule_violations": pol_result.get("rule_violations", [])
         }
+
 
     # ================================================================
     # HELPER FUNCTIONS
@@ -466,22 +467,35 @@ class CorePipeline:
         day_type    : str   = "weekday",
         cloud_factor: float = 0.9
     ) -> list:
-        """Generate sample 24h schedule for the plan."""
+        """Generate sample 24h schedule for the plan (closed-loop simulation)."""
         if self.twin is None:
             return []
 
         self.twin.reset(initial_soc=0.50)
         results = []
 
+        # Start with no action
+        prev_charge    = 0.0
+        prev_discharge = 0.0
+
         for t in range(96):
             hour  = t * 0.25
+
+            # Apply PREVIOUS action's battery commands when stepping twin
             state = self.twin.twin_step(
                 hour_of_day  = hour,
                 day_type     = day_type,
-                cloud_factor = cloud_factor
+                cloud_factor = cloud_factor,
+                charge_kw    = prev_charge,
+                discharge_kw = prev_discharge,
             )
+
             opt    = self.solver.optimize(state)
             action = opt.get("best_action", {})
+
+            # Store this timestep's decision for the next iteration
+            prev_charge    = float(action.get("charge_kw",    0.0))
+            prev_discharge = float(action.get("discharge_kw", 0.0))
 
             results.append({
                 "timestep"    : t,
@@ -490,12 +504,15 @@ class CorePipeline:
                 "pv_kw"       : round(state.pv_power_kw, 2),
                 "load_kw"     : round(state.load_kw, 2),
                 "action"      : action.get("action_name", "grid_only"),
+                "charge_kw"   : round(prev_charge, 4),
+                "discharge_kw": round(prev_discharge, 4),
                 "cost"        : round(
                     action.get("cost_breakdown", {}).get("total_cost", 0), 6)
             })
 
         self.twin.reset(initial_soc=0.50)
         return results
+
 
     def _predict_next_hours(
         self,

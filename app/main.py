@@ -27,6 +27,16 @@ scheduler = BackgroundScheduler()
 
 def scheduled_update():
     logger.info("Scheduler: running periodic update...")
+    from app.database import SessionLocal
+    from app.services.algorithm_service import AlgorithmService
+
+    db = SessionLocal()
+    try:
+        AlgorithmService.run_scheduled_update(db)
+    except Exception as e:
+        logger.warning("Scheduler update failed: %s", e)
+    finally:
+        db.close()
 
 
 @asynccontextmanager

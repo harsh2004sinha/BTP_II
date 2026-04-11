@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { plansApi } from "@/lib/plansApi";
+import { getErrorMessage } from "@/lib/utils";
 import toast from "react-hot-toast";
 
 export function usePlans() {
@@ -16,7 +17,7 @@ export function usePlans() {
       const res = await plansApi.getAllPlans();
       if (res.success) setPlans(res.data.plans || []);
     } catch (err) {
-      const msg = err.response?.data?.detail || "Failed to load plans";
+      const msg = getErrorMessage(err) || "Failed to load plans";
       setError(msg);
       toast.error(msg);
     } finally {

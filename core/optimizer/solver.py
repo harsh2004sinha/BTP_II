@@ -99,6 +99,8 @@ class Solver:
 
             evaluated.append({**action, **result})
 
+            # Strict less-than: ties keep the earlier (more specific) action.
+            # But only accept solar/battery actions when they genuinely help.
             if result["total_cost"] < best_cost:
                 best_cost   = result["total_cost"]
                 best_action = {**action, **result}
@@ -237,16 +239,22 @@ class Solver:
                         / (0.95 * self.dt_hours)) if soc < soc_max else 0.0
         avail_charge = min(avail_charge, max_charge)
 
+        # Meaningful solar threshold — below this we treat PV as zero
+        _PV_MIN = 0.05  # kW
+        has_solar = pv_kw >= _PV_MIN
+
         # --- Action 1: Use solar directly, cover deficit from grid ---
-        candidates.append({
-            "action_name"   : "solar_direct",
-            "charge_kw"     : 0.0,
-            "discharge_kw"  : 0.0,
-            "grid_import_kw": round(max(0.0, net_load), 4),
-            "grid_export_kw": 0.0,
-            "pv_used_kw"    : round(min(pv_kw, load_kw), 4),
-            "description"   : "Use solar directly, grid covers rest"
-        })
+        # Only add this candidate when solar is actually generating something
+        if has_solar:
+            candidates.append({
+                "action_name"   : "solar_direct",
+                "charge_kw"     : 0.0,
+                "discharge_kw"  : 0.0,
+                "grid_import_kw": round(max(0.0, net_load), 4),
+                "grid_export_kw": 0.0,
+                "pv_used_kw"    : round(min(pv_kw, load_kw), 4),
+                "description"   : "Use solar directly, grid covers rest"
+            })
 
         # --- Action 2: Solar + charge battery with surplus ---
         if surplus > 0 and avail_charge > 0:
