@@ -75,6 +75,14 @@ class SystemSizer:
                     })
                     continue
 
+                # Physical Constraint: A battery cannot be charged if it's too large for the solar array.
+                # (Assuming no grid charging). Rule of thumb: max battery = 3x solar peak power.
+                # If solar is 0, battery must be 0 in our current simulation.
+                if solar_kw == 0 and batt_kwh > 0:
+                    continue
+                if batt_kwh > solar_kw * 3.0:
+                    continue
+
                 daily_cost, solar_used = self._simulate_day(
                     solar_peak_kw = solar_kw,
                     battery_kwh   = batt_kwh,
@@ -127,7 +135,8 @@ class SystemSizer:
         }
 
     def _select_best_result(self, all_results: List[dict]) -> dict:
-        """Choose a practical system rather than a trivial high-ROI minimum system."""
+        """Choose a practical system rather than a trivial high-ROI minimum system.
+        Prevents diminishing returns where massive investments yield negligible extra savings."""
         viable = [
             r for r in all_results
             if r["roi_years"] != float("inf") and r["annual_savings"] > 0
@@ -141,10 +150,15 @@ class SystemSizer:
         threshold = min(max(best_roi * 1.5, best_roi + 4.0), 12.0)
 
         candidates = [r for r in viable if r["roi_years"] <= threshold]
-        if candidates:
-            return max(candidates, key=lambda r: (r["annual_savings"], -r["investment"]))
-
-        return min(viable, key=lambda r: (r["roi_years"], r["investment"]))
+        if not candidates:
+            return min(viable, key=lambda r: (r["roi_years"], r["investment"]))
+            
+        # Diminishing Returns Penalty: Group candidates that achieve within 95% of the max savings
+        max_savings = max(r["annual_savings"] for r in candidates)
+        top_tier = [r for r in candidates if r["annual_savings"] >= 0.95 * max_savings]
+        
+        # Pick the cheapest investment among the top savers
+        return min(top_tier, key=lambda r: r["investment"])
 
     # ----------------------------------------------------------------
     def _simulate_day(

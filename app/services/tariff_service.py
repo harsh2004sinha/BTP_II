@@ -49,16 +49,16 @@ class TariffService:
             "export_rate": 0.08
         },
         "india": {
-            "name": "India Average Tariff",
+            "name": "Standard Indian Tiered Tariff",
             "currency": "INR",
             "type": "tiered",
             "tiers": [
-                {"min_units": 0, "max_units": 100, "rate": 5.50},
-                {"min_units": 101, "max_units": 200, "rate": 7.25},
-                {"min_units": 201, "max_units": 400, "rate": 8.75},
-                {"min_units": 401, "max_units": float('inf'), "rate": 9.50}
+                {"min_units": 0, "max_units": 200, "rate": 5.00},
+                {"min_units": 200, "max_units": 400, "rate": 7.00},
+                {"min_units": 400, "max_units": 800, "rate": 9.00},
+                {"min_units": 800, "max_units": float('inf'), "rate": 11.00}
             ],
-            "fixed_charge": 100.0,
+            "fixed_charge": 150.0,
             "export_rate": 3.00
         },
         "default": {
@@ -155,10 +155,13 @@ class TariffService:
                     
                 tier_max = tier['max_units']
                 tier_min = tier['min_units']
-                tier_units = min(
-                    remaining_units, 
-                    tier_max - tier_min
-                )
+                
+                # Handle boundaries like 201-400 (width 200) vs 200-400 (width 200)
+                width = tier_max - tier_min
+                if tier_min > 0 and str(tier_min).endswith('1'):
+                    width += 1
+                    
+                tier_units = min(remaining_units, width)
                 
                 energy_charge += tier_units * tier['rate']
                 remaining_units -= tier_units
