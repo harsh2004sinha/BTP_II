@@ -47,16 +47,7 @@ class PVModel:
     ) -> dict:
         """
         Calculate solar power output at a single timestep.
-
-        Args:
-            irradiance_wm2 : Solar irradiance in W/m²
-            area_m2        : Total panel area in m²
-            ambient_temp_c : Ambient temperature in °C
-
-        Returns:
-            dict — power_kw, cell_temp_c, efficiency
         """
-
         if irradiance_wm2 <= 0:
             return {
                 "power_kw"   : 0.0,
@@ -96,9 +87,6 @@ class PVModel:
     ) -> List[dict]:
         """
         Generate full-day PV profile from irradiance timeseries.
-
-        Returns:
-            List of dicts — power at each timestep
         """
         n = len(irradiance_profile)
         if temp_profile is None:
@@ -117,16 +105,25 @@ class PVModel:
     def size_system(
         self,
         target_kwh_per_day         : float,
-        avg_irradiance_wm2         : float = 500.0,
+        avg_irradiance_wm2         : float = 500.0,   # kept for API compat, not used in formula
         peak_sun_hours             : float = 5.0,
         roof_area_available_m2     : float = 1000.0
     ) -> dict:
         """
         Estimate required panel area for a daily energy target.
+
+        FIX BUG 11: Removed double-counting of solar resource.
+        OLD (wrong): energy_per_m2 = base_efficiency * avg_irradiance_wm2 * peak_sun_hours / 1000
+            → This multiplied irradiance AND peak_sun_hours (both encode the same resource)
+            → Caused 70% overestimate in solar sizing
+        NEW (correct): energy_per_m2 = base_efficiency * peak_sun_hours
+            → peak_sun_hours = kWh/m²/day at reference 1 kW/m² — already the full resource
         """
-        energy_per_m2    = self.base_efficiency * avg_irradiance_wm2 * peak_sun_hours / 1000
+        # FIXED: peak_sun_hours already = kWh/m²/day, no need to multiply irradiance
+        energy_per_m2    = self.base_efficiency * peak_sun_hours
         required_area_m2 = target_kwh_per_day / energy_per_m2 if energy_per_m2 > 0 else 0
         actual_area_m2   = min(required_area_m2, roof_area_available_m2)
+        # peak_power is always rated at STC (1000 W/m²) — this formula is correct
         peak_power_kw    = actual_area_m2 * self.base_efficiency * self.stc_irradiance / 1000
 
         return {

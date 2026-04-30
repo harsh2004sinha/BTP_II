@@ -14,6 +14,7 @@ from app.services.algorithm_service import AlgorithmService
 from app.utils.helpers import create_api_response
 import json
 import logging
+import math
 import traceback
 
 logger = logging.getLogger(__name__)
@@ -145,23 +146,28 @@ def get_result(
 
     graph_data = _norm_graph_data(result.graphData)
 
+    def _json_safe(value):
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        return value
+
     data = {
         "status": "completed",
         "plan_id": plan_id,
-        "solar_size_kw": result.solarSize,
-        "battery_size_kwh": result.batterySize,
-        "roi_years": result.roi,
-        "annual_savings": result.saving,
-        "total_cost": result.totalCost,
-        "payback_period": result.paybackPeriod,
+        "solar_size_kw": _json_safe(result.solarSize),
+        "battery_size_kwh": _json_safe(result.batterySize),
+        "roi_years": _json_safe(result.roi),
+        "annual_savings": _json_safe(result.saving),
+        "total_cost": _json_safe(result.totalCost),
+        "payback_period": _json_safe(result.paybackPeriod),
         "graph_data": graph_data,
         # Frontend Result page field names
-        "solarSize_kW": result.solarSize,
-        "batterySize_kWh": result.batterySize,
-        "annualSaving": result.saving,
-        "totalCost": result.totalCost,
-        "co2Reduction_kg": result.co2Reduction,
-        "annualGeneration": result.annualGeneration,
+        "solarSize_kW": _json_safe(result.solarSize),
+        "batterySize_kWh": _json_safe(result.batterySize),
+        "annualSaving": _json_safe(result.saving),
+        "totalCost": _json_safe(result.totalCost),
+        "co2Reduction_kg": _json_safe(result.co2Reduction),
+        "annualGeneration": _json_safe(result.annualGeneration),
         "graphData": graph_data,
         "createdAt": str(result.createdAt) if result.createdAt else None,
     }

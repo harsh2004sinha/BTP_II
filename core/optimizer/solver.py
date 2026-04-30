@@ -85,7 +85,7 @@ class Solver:
 
         # Generate candidate actions
         candidates = self._generate_candidates(
-            soc, pv_kw, load_kw, grid_price, batt_cap, batt_health)
+            soc, pv_kw, load_kw, grid_price, batt_cap, batt_health, state.hour_of_day)
 
         # Evaluate each candidate
         best_action = None
@@ -170,7 +170,7 @@ class Solver:
 
             # Get best action for this simulated state
             candidates = self._generate_candidates(
-                sim_soc, pv_kw, load_kw, grid_price, batt_cap, state.battery_health)
+                sim_soc, pv_kw, load_kw, grid_price, batt_cap, state.battery_health, (state.hour_of_day + t * self.dt_hours) % 24)
 
             best_a    = None
             best_c    = float("inf")
@@ -206,129 +206,149 @@ class Solver:
         load_kw    : float,
         grid_price : float,
         batt_cap   : float,
-        batt_health: float
+        batt_health: float,
+        hour       : float = 12.0
     ) -> List[dict]:
         """
-        Generate candidate actions to evaluate.
+        Generate candidate actions based on time-aware, priority-driven rules.
 
-        Covers all meaningful microgrid operating modes:
-            1. Solar only (no battery, no grid)
-            2. Solar + charge battery
-            3. Solar + grid (no battery)
-            4. Battery discharge only
-            5. Solar + battery discharge
-            6. Grid import only
-            7. Export solar surplus
-            8. Battery discharge + grid (hybrid)
+        Rules:
+          SURPLUS (solar > load):
+            - ALWAYS charge battery first (SOC < 90%)
+            - Leftover surplus is curtailed — no grid export
+
+          DEFICIT (load > solar):
+            - Solar always covers what it can
+            - Morning/Midday (06-15h): use battery (SOC > 10%) + grid for the rest
+            - Afternoon Reserve (15-18h): save battery for night, use grid only
+            - Night (18-06h): freely discharge battery (SOC > 10%) + grid for rest
         """
         candidates = []
-        net_load   = max(0.0, load_kw - pv_kw)
-        surplus    = max(0.0, pv_kw   - load_kw)
+        net_load = max(0.0, load_kw - pv_kw)   # gap not covered by solar
+        surplus  = max(0.0, pv_kw   - load_kw)  # solar beyond load
 
-        max_charge    = self.constraints.max_charge_kw
-        max_discharge = self.constraints.max_discharge_kw
-        soc_min       = self.constraints.battery_soc_min
-        soc_max       = self.constraints.battery_soc_max
+        soc_min    = self.constraints.battery_soc_min   # 0.10
+        soc_max    = self.constraints.battery_soc_max   # 0.90
+        max_chg    = self.constraints.max_charge_kw
+        max_dis    = self.constraints.max_discharge_kw
 
-        # Available battery energy
-        avail_discharge = ((soc - soc_min) * batt_cap * 0.95
-                           / self.dt_hours) if soc > soc_min else 0.0
-        avail_discharge = min(avail_discharge, max_discharge)
+        # ── How much can we charge without exceeding 90% SOC? ────────
+        if soc < soc_max and batt_cap > 0:
+            avail_charge = min((soc_max - soc) * batt_cap / (0.95 * self.dt_hours), max_chg)
+        else:
+            avail_charge = 0.0
 
-        avail_charge = ((soc_max - soc) * batt_cap
-                        / (0.95 * self.dt_hours)) if soc < soc_max else 0.0
-        avail_charge = min(avail_charge, max_charge)
+        # ── How much can we discharge without dropping below 10% SOC? ─
+        if soc > soc_min and batt_cap > 0:
+            avail_discharge = min((soc - soc_min) * batt_cap * 0.95 / self.dt_hours, max_dis)
+        else:
+            avail_discharge = 0.0
 
-        # Meaningful solar threshold — below this we treat PV as zero
-        _PV_MIN = 0.05  # kW
+        # ── Afternoon Reserve Rule (15:00–18:00) ────────────────────
+        # Block discharge during the last hours of sunlight so the battery
+        # stays full for the night. Override only if price is exceptionally high.
+        if 15.0 <= hour < 18.0 and grid_price < 0.20:
+            avail_discharge = 0.0
+
+        _PV_MIN   = 0.05
         has_solar = pv_kw >= _PV_MIN
 
-        # --- Action 1: Use solar directly, cover deficit from grid ---
-        # Only add this candidate when solar is actually generating something
-        if has_solar:
+        # ════════════════════════════════════════════════════════════
+        # SURPLUS: solar output > load
+        # Priority: charge battery → curtail excess
+        # ════════════════════════════════════════════════════════════
+        if surplus > 0.0:
+            if avail_charge > 0.0:
+                charge = min(surplus, avail_charge)
+                candidates.append({
+                    "action_name"   : "solar_charge_battery",
+                    "charge_kw"     : round(charge, 4),
+                    "discharge_kw"  : 0.0,
+                    "grid_import_kw": 0.0,
+                    "grid_export_kw": 0.0,
+                    "pv_used_kw"    : round(min(pv_kw, load_kw + charge), 4),
+                    "description"   : "Solar covers load + charges battery, excess curtailed",
+                })
+            # solar-direct (battery full or unavailable) — surplus curtailed
             candidates.append({
                 "action_name"   : "solar_direct",
                 "charge_kw"     : 0.0,
                 "discharge_kw"  : 0.0,
-                "grid_import_kw": round(max(0.0, net_load), 4),
+                "grid_import_kw": 0.0,
                 "grid_export_kw": 0.0,
                 "pv_used_kw"    : round(min(pv_kw, load_kw), 4),
-                "description"   : "Use solar directly, grid covers rest"
+                "description"   : "Solar covers load, surplus curtailed",
             })
 
-        # --- Action 2: Solar + charge battery with surplus ---
-        if surplus > 0 and avail_charge > 0:
-            charge = min(surplus, avail_charge)
-            remaining_surplus = surplus - charge
+        # ════════════════════════════════════════════════════════════
+        # DEFICIT: load > solar  (net_load > 0)
+        # Priority: solar partial → battery (if allowed) → grid for rest
+        # ════════════════════════════════════════════════════════════
+        if net_load > 0.0:
+            pv_partial = round(min(pv_kw, load_kw), 4)
+
+            # Option A — Battery + Grid hybrid (battery helps reduce grid import)
+            if avail_discharge > 0.0:
+                batt_contrib = min(net_load, avail_discharge)
+                grid_needed  = max(0.0, net_load - batt_contrib)
+                candidates.append({
+                    "action_name"   : "battery_discharge",
+                    "charge_kw"     : 0.0,
+                    "discharge_kw"  : round(batt_contrib, 4),
+                    "grid_import_kw": round(grid_needed, 4),
+                    "grid_export_kw": 0.0,
+                    "pv_used_kw"    : pv_partial,
+                    "description"   : "Solar + battery cover load, grid fills remainder",
+                })
+                # Peak-shaving variant — explicit when grid tariff is high
+                if grid_price >= 0.20:
+                    candidates.append({
+                        "action_name"   : "peak_shaving",
+                        "charge_kw"     : 0.0,
+                        "discharge_kw"  : round(batt_contrib, 4),
+                        "grid_import_kw": round(grid_needed, 4),
+                        "grid_export_kw": 0.0,
+                        "pv_used_kw"    : pv_partial,
+                        "description"   : "Peak-shaving: battery + solar, grid fills remainder",
+                    })
+
+            # Option B — Grid only (battery skipped or in reserve)
             candidates.append({
-                "action_name"   : "solar_charge_battery",
-                "charge_kw"     : round(charge, 4),
+                "action_name"   : "grid_only",
+                "charge_kw"     : 0.0,
+                "discharge_kw"  : 0.0,
+                "grid_import_kw": round(net_load, 4),
+                "grid_export_kw": 0.0,
+                "pv_used_kw"    : pv_partial,
+                "description"   : "Solar + grid covers load, battery held in reserve",
+            })
+
+        # ════════════════════════════════════════════════════════════
+        # BALANCED: load == solar (edge case)
+        # ════════════════════════════════════════════════════════════
+        if net_load == 0.0 and surplus == 0.0 and has_solar:
+            candidates.append({
+                "action_name"   : "solar_direct",
+                "charge_kw"     : 0.0,
                 "discharge_kw"  : 0.0,
                 "grid_import_kw": 0.0,
-                "grid_export_kw": round(remaining_surplus, 4),
+                "grid_export_kw": 0.0,
                 "pv_used_kw"    : round(pv_kw, 4),
-                "description"   : "Charge battery with solar surplus"
+                "description"   : "Solar exactly meets load",
             })
 
-        # --- Action 3: Export all surplus to grid ---
-        if surplus > 0:
+        # ════════════════════════════════════════════════════════════
+        # Fallback safety net
+        # ════════════════════════════════════════════════════════════
+        if not candidates:
             candidates.append({
-                "action_name"   : "export_surplus",
+                "action_name"   : "grid_only",
                 "charge_kw"     : 0.0,
                 "discharge_kw"  : 0.0,
-                "grid_import_kw": 0.0,
-                "grid_export_kw": round(surplus, 4),
-                "pv_used_kw"    : round(min(pv_kw, load_kw), 4),
-                "description"   : "Export surplus solar to grid"
-            })
-
-        # --- Action 4: Discharge battery to cover load deficit ---
-        if net_load > 0 and avail_discharge > 0:
-            discharge = min(net_load, avail_discharge)
-            grid_needed = max(0.0, net_load - discharge)
-            candidates.append({
-                "action_name"   : "battery_discharge",
-                "charge_kw"     : 0.0,
-                "discharge_kw"  : round(discharge, 4),
-                "grid_import_kw": round(grid_needed, 4),
+                "grid_import_kw": round(max(0.0, load_kw), 4),
                 "grid_export_kw": 0.0,
-                "pv_used_kw"    : round(min(pv_kw, load_kw), 4),
-                "description"   : "Discharge battery to reduce grid import"
-            })
-
-        # --- Action 5: Full battery discharge (avoid peak tariff) ---
-        if grid_price >= 0.20 and avail_discharge > 0:
-            candidates.append({
-                "action_name"   : "peak_shaving",
-                "charge_kw"     : 0.0,
-                "discharge_kw"  : round(min(net_load, avail_discharge), 4),
-                "grid_import_kw": round(max(0.0, net_load - avail_discharge), 4),
-                "grid_export_kw": 0.0,
-                "pv_used_kw"    : round(min(pv_kw, load_kw), 4),
-                "description"   : "Peak shaving: battery discharge during high tariff"
-            })
-
-        # --- Action 6: Grid import only (no battery) ---
-        candidates.append({
-            "action_name"   : "grid_only",
-            "charge_kw"     : 0.0,
-            "discharge_kw"  : 0.0,
-            "grid_import_kw": round(net_load, 4),
-            "grid_export_kw": 0.0,
-            "pv_used_kw"    : round(min(pv_kw, load_kw), 4),
-            "description"   : "Import all deficit from grid"
-        })
-
-        # --- Action 7: Charge battery from grid (off-peak) ---
-        if grid_price <= 0.09 and avail_charge > 0 and soc < 0.80:
-            candidates.append({
-                "action_name"   : "grid_charge_battery",
-                "charge_kw"     : round(min(avail_charge * 0.5, max_charge), 4),
-                "discharge_kw"  : 0.0,
-                "grid_import_kw": round(net_load + min(avail_charge * 0.5, max_charge), 4),
-                "grid_export_kw": 0.0,
-                "pv_used_kw"    : round(min(pv_kw, load_kw), 4),
-                "description"   : "Charge battery from cheap off-peak grid"
+                "pv_used_kw"    : 0.0,
+                "description"   : "Grid only fallback",
             })
 
         return candidates

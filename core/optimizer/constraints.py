@@ -23,7 +23,7 @@ class Constraints:
     def __init__(
         self,
         battery_soc_min     : float = 0.10,
-        battery_soc_max     : float = 0.95,
+        battery_soc_max     : float = 0.90,
         battery_soc_reserve : float = 0.20,
         max_charge_kw       : float = 50.0,
         max_discharge_kw    : float = 50.0,

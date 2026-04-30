@@ -27,33 +27,27 @@ logger = logging.getLogger(__name__)
 def _sanitize_for_json(obj):
     """
     Sanitize a dict/list for PostgreSQL JSON storage.
-    Uses a round-trip through json.dumps/loads with a custom encoder
-    that handles numpy scalars, Python booleans, and inf/nan values.
+    Recursively converts numpy types and replaces inf/nan floats with None.
     """
-    import json
     import math
 
-    class _Encoder(json.JSONEncoder):
-        def default(self, o):
-            # numpy scalar types
-            type_name = type(o).__name__
-            module = getattr(type(o), "__module__", "") or ""
-            if "numpy" in module:
-                if hasattr(o, "item"):       # covers float64, int64, bool_, etc.
-                    val = o.item()
-                    if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
-                        return None
-                    return val
-            if isinstance(o, float) and (math.isnan(o) or math.isinf(o)):
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_sanitize_for_json(v) for v in obj]
+    elif isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    else:
+        # Handle numpy types
+        module = getattr(type(obj), "__module__", "") or ""
+        if "numpy" in module and hasattr(obj, "item"):
+            val = obj.item()
+            if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
                 return None
-            return super().default(o)
-
-    try:
-        json_str = json.dumps(obj, cls=_Encoder)
-        return json.loads(json_str)
-    except Exception:
-        # last resort: convert to string representation
-        return {}
+            return val
+        return obj
 
 
 
@@ -91,20 +85,76 @@ class AlgorithmService:
             return 500.0
 
     @staticmethod
-    def _grid_cost_for_plan(plan: Plan) -> float:
+    def _grid_cost_for_plan(plan: Plan, monthly_kwh: float = None) -> float:
         try:
             from app.services.tariff_service import TariffService
 
-            r = TariffService.get_tariff("default")
-            if r.get("type") == "flat":
-                return float(r.get("flat_rate", 0.12))
-            tiers = r.get("tiers") or []
-            if tiers:
-                mid = tiers[len(tiers) // 2]
-                return float(mid.get("rate", 0.12))
+            region = "default"
+            if plan and getattr(plan, "location", None):
+                region = str(plan.location).strip() or "default"
+
+            tariff = TariffService.get_tariff(region)
+
+            if monthly_kwh and monthly_kwh > 0:
+                bill = TariffService.calculate_bill(monthly_kwh, region)
+                return float(bill.get("average_rate", 0.12))
+
+            if tariff.get("type") == "flat":
+                return float(tariff.get("flat_rate", 0.12))
+
+            if tariff.get("type") == "tiered":
+                tiers = tariff.get("tiers") or []
+                rates = [float(t.get("rate", 0.12)) for t in tiers if t.get("rate") is not None]
+                if rates:
+                    return float(sum(rates) / len(rates))
+                return 0.12
+
+            if tariff.get("type") == "tou":
+                rates = [float(r.get("rate", 0.12)) for r in tariff.get("tou_rates", []) if r.get("rate") is not None]
+                if rates:
+                    return float(sum(rates) / len(rates))
+                return 0.12
+
             return 0.12
         except Exception:
             return 0.12
+
+    @staticmethod
+    def _default_system_costs(plan: Plan) -> dict:
+        """Return region-aware default solar/battery installed costs."""
+        from app.services.tariff_service import TariffService
+
+        region = "default"
+        if plan and getattr(plan, "location", None):
+            region = str(plan.location).strip() or "default"
+
+        tariff = TariffService.get_tariff(region)
+        currency = str(tariff.get("currency", "USD")).upper()
+
+        if currency == "INR":
+            return {
+                "solar_price_per_kw": 45000.0,
+                "battery_price_per_kwh": 12000.0
+            }
+        if currency == "MYR":
+            return {
+                "solar_price_per_kw": 3200.0,
+                "battery_price_per_kwh": 1500.0
+            }
+        if currency == "AUD":
+            return {
+                "solar_price_per_kw": 1500.0,
+                "battery_price_per_kwh": 450.0
+            }
+        if currency == "GBP":
+            return {
+                "solar_price_per_kw": 1200.0,
+                "battery_price_per_kwh": 350.0
+            }
+        return {
+            "solar_price_per_kw": 1000.0,
+            "battery_price_per_kwh": 300.0
+        }
 
     @staticmethod
     def _collect_plan_inputs(plan_id: str, db: Session) -> dict:
@@ -122,15 +172,35 @@ class AlgorithmService:
             {"month": record.month, "kwh": float(record.units)} for record in consumption
         ]
 
+        # Use actual bill consumption and total amount to estimate tariff
+        total_units = 0.0
+        total_amount = 0.0
+        for record in consumption:
+            if record.units is not None and record.units > 0:
+                total_units += float(record.units)
+            if record.totalAmount is not None and float(record.totalAmount) > 0:
+                total_amount += float(record.totalAmount)
+
+        if total_units > 0:
+            if total_amount > 0:
+                grid_cost = total_amount / total_units
+            else:
+                monthly_units = total_units / len(consumption)
+                grid_cost = AlgorithmService._grid_cost_for_plan(plan, monthly_kwh=monthly_units)
+        else:
+            grid_cost = AlgorithmService._grid_cost_for_plan(plan)
+
+        system_costs = AlgorithmService._default_system_costs(plan)
+
         return {
             "plan_id": plan_id,
             "budget": float(plan.budget),
             "roof_area_m2": float(plan.roofArea),
             "location": plan.location or "Unknown",
             "irradiance_wm2": AlgorithmService._irradiance_for_plan(plan),
-            "grid_cost_per_kwh": AlgorithmService._grid_cost_for_plan(plan),
-            "solar_price_per_kw": 1000.0,
-            "battery_price_per_kwh": 300.0,
+            "grid_cost_per_kwh": float(grid_cost),
+            "solar_price_per_kw": float(system_costs["solar_price_per_kw"]),
+            "battery_price_per_kwh": float(system_costs["battery_price_per_kwh"]),
             "battery_option": "auto",
             "solar_option": "yes",
             "day_type": "weekday",
@@ -205,16 +275,23 @@ class AlgorithmService:
         raw_sanitized   = _sanitize_for_json(raw if isinstance(raw, dict) else AlgorithmService._as_dict(raw))
         graph_sanitized = _sanitize_for_json(graph_payload)
 
+        def _safe_float(value, default=None):
+            try:
+                val = float(value)
+            except Exception:
+                return default
+            return val if math.isfinite(val) else default
+
         new_result = Result(
             planId=plan_id,
-            solarSize=float(result.get("solar_size_kw", 0) or 0),
-            batterySize=float(result.get("battery_size_kwh", 0) or 0),
-            roi=float(result.get("roi", 0) or 0),
-            saving=float(result.get("saving", 0) or 0),
-            totalCost=float(result.get("total_cost", 0) or 0),
-            paybackPeriod=float(result.get("payback_period", 0) or 0),
-            annualGeneration=float(annual_gen),
-            co2Reduction=float(co2),
+            solarSize=_safe_float(result.get("solar_size_kw", 0), 0.0),
+            batterySize=_safe_float(result.get("battery_size_kwh", 0), 0.0),
+            roi=_safe_float(result.get("roi", None), None),
+            saving=_safe_float(result.get("saving", None), None),
+            totalCost=_safe_float(result.get("total_cost", None), None),
+            paybackPeriod=_safe_float(result.get("payback_period", None), None),
+            annualGeneration=_safe_float(annual_gen, None),
+            co2Reduction=_safe_float(co2, None),
             graphData=graph_sanitized,
             rawOutput=raw_sanitized,
         )
@@ -267,13 +344,37 @@ class AlgorithmService:
             else 0.12
         )
 
+        # ── Sync SOC from stored schedule ─────────────────────────────
+        # The stored schedule was built during planning and has the correct
+        # SOC trajectory. Read the SOC for the current hour so the live
+        # prediction starts from the right state instead of the reset twin.
+        stored_soc = None
+        res_row = db.query(Result).filter(Result.planId == plan_id).first()
+        if res_row:
+            from app.services.algorithm_service import AlgorithmService as _AS
+            rows = _AS._hourly_rows_from_result(res_row, 24)
+            for row in rows:
+                try:
+                    row_hour = datetime.fromisoformat(
+                        row["time"].replace("Z", "")).hour
+                    if row_hour == now.hour:
+                        soc_pct = float(row.get("batterySOC", 50))
+                        stored_soc = soc_pct / 100.0 if soc_pct > 1.0 else soc_pct
+                        break
+                except Exception:
+                    pass
+
         predict_input = {
-            "plan_id": plan_id,
+            "plan_id"    : plan_id,
             "hour_of_day": hour,
-            "day_type": AlgorithmService._get_day_type(),
+            "day_type"   : AlgorithmService._get_day_type(),
             "cloud_factor": 0.9,
-            "grid_price": float(grid_cost),
+            "grid_price" : float(grid_cost),
         }
+        # Inject stored SOC so live twin matches the saved schedule
+        if stored_soc is not None:
+            predict_input["soc"] = stored_soc
+
         core_result = run_prediction(predict_input)
         AlgorithmService._save_prediction(plan_id, core_result, db)
 
@@ -281,15 +382,18 @@ class AlgorithmService:
         solar_kw = float(core_result.get("pv_kw") or core_result.get("solar_kw") or 0)
         raw_action = core_result.get("action")
         return {
-            "time": t.isoformat(),
-            "solar_kW": solar_kw,
-            "batterySOC": float(core_result.get("battery_soc") or 0),
-            "gridCost": float(core_result.get("grid_cost") or 0),
-            "gridImport": float(core_result.get("grid_import_kw") or 0),
-            "gridExport": float(core_result.get("grid_export_kw") or 0),
-            "consumption": float(core_result.get("consumption_kw") or 0),
-            # Pass solar_kw so mapper can override solar actions when PV=0
-            "action": AlgorithmService._map_action_to_ui(raw_action, pv_kw=solar_kw),
+            "time"        : t.isoformat(),
+            "solar_kW"    : solar_kw,
+            "batterySOC"  : float(core_result.get("battery_soc") or 0),
+            "gridImport"  : float(core_result.get("grid_import_kw") or 0),
+            "gridExport"  : float(core_result.get("grid_export_kw") or 0),
+            "consumption" : float(core_result.get("consumption_kw") or 0),
+            "action"      : AlgorithmService._map_action_to_ui(raw_action, pv_kw=solar_kw),
+            "batteryAction": (
+                "charge"    if float(core_result.get("charge_kw")    or 0) > 0.05 else
+                "discharge" if float(core_result.get("discharge_kw") or 0) > 0.05 else
+                "idle"
+            )
         }
 
     @staticmethod
@@ -326,6 +430,9 @@ class AlgorithmService:
             soc_pct = soc * 100.0 if soc <= 1.01 else soc
             # Pass pv to mapper so it can override solar labels when PV is 0
             act = AlgorithmService._map_action_to_ui(steps[-1].get("action"), pv_kw=pv)
+            cb = float(steps[-1].get("charge_kw", 0))
+            db = float(steps[-1].get("discharge_kw", 0))
+            bact = "charge" if cb > 0.05 else ("discharge" if db > 0.05 else "idle")
             cost = sum(float(s.get("cost", 0)) for s in steps)
             t = now.replace(hour=h, minute=0, second=0, microsecond=0)
             rows.append(
@@ -333,11 +440,11 @@ class AlgorithmService:
                     "time": t.isoformat(),
                     "solar_kW": round(pv, 2),
                     "batterySOC": round(soc_pct, 1),
-                    "gridCost": round(cost, 5),
                     "gridImport": 0.0,
                     "gridExport": 0.0,
                     "consumption": round(ld, 2),
                     "action": act,
+                    "batteryAction": bact,
                 }
             )
         return rows

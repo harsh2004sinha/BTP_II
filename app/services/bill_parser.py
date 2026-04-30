@@ -160,7 +160,13 @@ class BillParser:
                                 str(row[amount_col])
                                 .replace(',', '')
                                 .replace('RM', '')
+                                .replace('MYR', '')
                                 .replace('$', '')
+                                .replace('£', '')
+                                .replace('€', '')
+                                .replace('₹', '')
+                                .replace('Rs', '')
+                                .replace('INR', '')
                                 .strip()
                             )
                         except (ValueError, TypeError):
@@ -268,8 +274,8 @@ class BillParser:
             r'(?:total\s+)?(?:units?|kwh)[:\s]+(\d+\.?\d*)',
         ],
         'amount': [
-            r'(?:total|amount|bill)[:\s]+(?:RM|MYR|\$|£|€)?\s*(\d+\.?\d*)',
-            r'(?:RM|MYR|\$)\s*(\d+\.?\d*)',
+            r'(?:total|amount|bill)[:\s]+(?:RM|MYR|\$|£|€|₹|Rs\.?|INR)?\s*(\d+\.?\d*)',
+            r'(?:RM|MYR|\$|£|€|₹|Rs\.?|INR)\s*(\d+\.?\d*)',
         ]
     }
 

@@ -36,7 +36,6 @@ export function PredictionChart({ data }) {
     hour:       d.time ? new Date(d.time).getHours() + ":00" : "",
     solar:      d.solar_kW,
     battery:    d.batterySOC,
-    gridCost:   d.gridCost,
     gridImport: d.gridImport,
     consumption: d.consumption,
   }));

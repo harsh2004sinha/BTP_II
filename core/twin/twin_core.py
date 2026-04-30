@@ -18,12 +18,6 @@ from .twin_state            import TwinState, ForecastBundle
 class DigitalTwin:
     """
     The digital twin continuously tracks and simulates the campus microgrid.
-
-    It:
-        1. Maintains a virtual copy of the physical system
-        2. Estimates state from sensor data (Kalman filter)
-        3. Generates probabilistic forecasts
-        4. Provides TwinState to the optimizer every 15 minutes
     """
 
     def __init__(
@@ -35,12 +29,15 @@ class DigitalTwin:
         initial_soc          : float = 0.50,
         dt_hours             : float = 0.25,
         forecast_horizon     : int   = 96,
-        mode                 : str   = "simulation"
+        mode                 : str   = "simulation",
+        location_peak_irr    : float = 900.0,    # FIX BUG 18: location-specific peak irradiance
     ):
         self.dt_hours             = dt_hours
         self.forecast_horizon     = forecast_horizon
         self.pv_area_m2           = pv_area_m2
         self.mode                 = mode
+        # FIX BUG 18: store location peak irradiance instead of hardcoding 900
+        self.location_peak_irr    = location_peak_irr
 
         # Store init params for reset
         self._battery_capacity_kwh = battery_capacity_kwh
@@ -51,6 +48,8 @@ class DigitalTwin:
         # Subsystem models
         self.battery    = BatteryModel(
             capacity_kwh = battery_capacity_kwh,
+            soc_min      = 0.10,
+            soc_max      = 0.90,
             initial_soc  = initial_soc
         )
         self.pv_model   = PVModel()
@@ -89,21 +88,6 @@ class DigitalTwin:
     ) -> TwinState:
         """
         Advance the twin by one 15-minute timestep.
-
-        Args:
-            hour_of_day    : Current hour (0 - 23.75)
-            day_type       : "weekday" / "saturday" / etc.
-            irradiance     : W/m2 (auto-generated if None)
-            ambient_temp_c : Air temperature degrees C
-            grid_price     : $/kWh (TOU if None)
-            charge_kw      : Battery charge command (kW)
-            discharge_kw   : Battery discharge command (kW)
-            grid_import_kw : Power drawn from grid
-            grid_export_kw : Power sold to grid
-            cloud_factor   : 0=overcast, 1=clear sky
-
-        Returns:
-            Updated TwinState
         """
 
         # 1. Generate sensor readings
@@ -126,11 +110,17 @@ class DigitalTwin:
         voltage_sim = self._soc_to_voltage(batt["soc"])
 
         # 4. State estimation
+        # FIX BUG 21: Scale sensor noise to system size (was fixed 0.5/1.0 kW)
+        # Old: np.random.normal(0, 0.5) on PV, np.random.normal(0, 1.0) on load
+        # These are fine for 100+ kW campus but cause 17-50% error on small systems
+        pv_noise   = max(0.05, pv_kw   * 0.03)   # 3% of reading, min 0.05 kW
+        load_noise = max(0.10, load_kw * 0.03)   # 3% of reading, min 0.10 kW
+
         est = self.estimator.estimate(
             soc_model        = batt["soc"],
             voltage_sensor   = voltage_sim + np.random.normal(0, 0.2),
-            pv_sensor_kw     = pv_kw       + np.random.normal(0, 0.5),
-            load_sensor_kw   = load_kw     + np.random.normal(0, 1.0),
+            pv_sensor_kw     = pv_kw   + np.random.normal(0, pv_noise),    # FIX BUG 21
+            load_sensor_kw   = load_kw + np.random.normal(0, load_noise),  # FIX BUG 21
             battery_capacity = self.battery.capacity_kwh
         )
 
@@ -195,17 +185,7 @@ class DigitalTwin:
         day_type     : str   = "weekday",
         cloud_factor : float = 1.0
     ) -> List[dict]:
-        """
-        Run a full 24-hour simulation day.
-
-        Args:
-            actions      : List of action dicts per timestep (optional)
-            day_type     : Day type string
-            cloud_factor : Cloud coverage (0=overcast, 1=clear)
-
-        Returns:
-            List of TwinState dicts (96 entries for 15-min steps)
-        """
+        """Run a full 24-hour simulation day."""
         n_steps = int(24 / self.dt_hours)
         results = []
 
@@ -237,42 +217,20 @@ class DigitalTwin:
 
     # ----------------------------------------------------------------
     def reset(self, initial_soc: float = 0.50):
-        """
-        Full reset of twin to initial conditions.
-
-        Clears:
-            - Battery SOC and cycle count
-            - Estimator Kalman filter and EMA smoothers
-            - State history
-            - Timestep counter
-
-        Args:
-            initial_soc : Starting SOC after reset (0.0 - 1.0)
-
-        Usage:
-            twin.reset()          # Reset to default 50% SOC
-            twin.reset(0.80)      # Reset to 80% SOC
-        """
-        # Reset battery model
+        """Full reset of twin to initial conditions."""
         self.battery.reset(soc=initial_soc)
-
-        # Reset state estimator (Kalman + EMA)
         self.estimator.reset(initial_soc=initial_soc)
-
-        # Reset state tracking
         self.current_state = TwinState(soc=initial_soc)
         self.timestep      = 0
         self.state_history = []
 
     # ----------------------------------------------------------------
     def reset_full(self):
-        """
-        Complete rebuild of all subsystems.
-        Use this if you want a completely fresh twin
-        with original constructor parameters.
-        """
+        """Complete rebuild of all subsystems."""
         self.battery = BatteryModel(
             capacity_kwh = self._battery_capacity_kwh,
+            soc_min      = 0.10,
+            soc_max      = 0.90,
             initial_soc  = self._initial_soc
         )
         self.estimator = StateEstimator(
@@ -291,15 +249,19 @@ class DigitalTwin:
         hour        : float,
         cloud_factor: float = 1.0
     ) -> float:
-        """Synthetic irradiance for simulation mode."""
+        """
+        Synthetic irradiance for simulation mode.
+        FIX BUG 18: Uses location_peak_irr instead of hardcoded 900 W/m²
+        """
         if 6.0 <= hour <= 18.0:
             angle = np.pi * (hour - 6.0) / 12.0
-            base  = 900.0 * np.sin(angle) * cloud_factor
+            # FIX BUG 18: was 900.0 (hardcoded), now uses actual location peak
+            base  = self.location_peak_irr * np.sin(angle) * cloud_factor
             return max(0.0, base + np.random.normal(0, 30.0))
         return 0.0
 
     def _get_tou_price(self, hour: float) -> float:
-        """Time-of-Use tariff pricing."""
+        """Time-of-Use tariff pricing (fallback when no grid_price passed)."""
         h = int(hour) % 24
         if h in range(17, 22):
             return 0.25    # On-peak

@@ -23,7 +23,7 @@ class BatteryModel:
         max_charge_kw      : float = 50.0,
         max_discharge_kw   : float = 50.0,
         soc_min            : float = 0.10,
-        soc_max            : float = 0.95,
+        soc_max            : float = 0.90,
         charge_efficiency  : float = 0.95,
         discharge_efficiency: float = 0.95,
         initial_soc        : float = 0.50,
@@ -63,6 +63,18 @@ class BatteryModel:
         Returns:
             dict — new SOC, actual powers, cycle count, flags
         """
+
+        if self.capacity_kwh <= 0:
+            return {
+                "soc"            : 0.0,
+                "charge_kw"      : 0.0,
+                "discharge_kw"   : 0.0,
+                "energy_in_kwh"  : 0.0,
+                "energy_out_kwh" : 0.0,
+                "cycle_count"    : 0.0,
+                "at_min_soc"     : True,
+                "at_max_soc"     : True
+            }
 
         # Clamp to physical limits
         charge_kw    = np.clip(charge_kw,    0.0, self.max_charge_kw)
@@ -116,12 +128,14 @@ class BatteryModel:
     # ----------------------------------------------------------------
     def available_discharge_kw(self, dt_hours: float = 0.25) -> float:
         """Max power battery can deliver right now."""
+        if self.capacity_kwh <= 0: return 0.0
         max_energy = (self.soc - self.soc_min) * self.capacity_kwh
         return min(self.max_discharge_kw,
                    max_energy * self.discharge_efficiency / dt_hours)
 
     def available_charge_kw(self, dt_hours: float = 0.25) -> float:
         """Max power battery can absorb right now."""
+        if self.capacity_kwh <= 0: return 0.0
         max_energy = (self.soc_max - self.soc) * self.capacity_kwh
         return min(self.max_charge_kw,
                    max_energy / (self.charge_efficiency * dt_hours))

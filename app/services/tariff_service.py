@@ -48,6 +48,19 @@ class TariffService:
             "fixed_charge": 1.10,
             "export_rate": 0.08
         },
+        "india": {
+            "name": "India Average Tariff",
+            "currency": "INR",
+            "type": "tiered",
+            "tiers": [
+                {"min_units": 0, "max_units": 100, "rate": 5.50},
+                {"min_units": 101, "max_units": 200, "rate": 7.25},
+                {"min_units": 201, "max_units": 400, "rate": 8.75},
+                {"min_units": 401, "max_units": float('inf'), "rate": 9.50}
+            ],
+            "fixed_charge": 100.0,
+            "export_rate": 3.00
+        },
         "default": {
             "name": "Generic Tariff",
             "currency": "USD",
@@ -91,11 +104,20 @@ class TariffService:
     def get_tariff(region: str = "default") -> Dict:
         """Get tariff data for a region"""
         region_lower = region.lower()
-        
+
+        india_keywords = [
+            "india", "delhi", "mumbai", "bangalore", "bengaluru",
+            "chennai", "kolkata", "hyderabad", "pune", "gurgaon",
+            "noida", "jaipur", "ahmedabad", "kochi", "lucknow",
+            "kharagpur", "west bengal", "wb", "maharashtra", "karnataka", "tamil nadu"
+        ]
+        if any(keyword in region_lower for keyword in india_keywords):
+            return TariffService.DEFAULT_TARIFFS["india"]
+
         for key in TariffService.DEFAULT_TARIFFS:
             if key in region_lower or region_lower in key:
                 return TariffService.DEFAULT_TARIFFS[key]
-        
+
         return TariffService.DEFAULT_TARIFFS["default"]
     
     @staticmethod
