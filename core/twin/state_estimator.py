@@ -52,7 +52,16 @@ class StateEstimator:
         """
 
         # SOC via Kalman
-        k = self.kalman.update(soc_model, voltage_sensor, battery_capacity)
+        if battery_capacity <= 0:
+            k = {
+                "soc_estimate"   : 0.0,
+                "uncertainty_std": 0.0,
+                "soc_percent"    : 0.0,
+                "kalman_gain"    : 0.0,
+                "innovation"     : 0.0
+            }
+        else:
+            k = self.kalman.update(soc_model, voltage_sensor, battery_capacity)
 
         # PV EMA smoothing
         # On first call OR after reset, initialize to sensor value directly

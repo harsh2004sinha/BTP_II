@@ -99,6 +99,55 @@ function SkeletonLoader() {
   );
 }
 
+/* ── Dynamic Hardware Recommendations ───────────────────────────────────── */
+
+function getSolarRecommendation(kw) {
+  if (kw < 3) {
+    return {
+      type: "Monocrystalline Half-Cell",
+      power: 400,
+      desc: "Ideal for small or complex residential roofs.",
+      inverterFactor: 1.1,
+    };
+  } else if (kw >= 15) {
+    return {
+      type: "Bifacial Monocrystalline",
+      power: 600,
+      desc: "Commercial grade. Maximizes yield on large flat roofs.",
+      inverterFactor: 1.05,
+    };
+  } else {
+    return {
+      type: "Monocrystalline PERC",
+      power: 540,
+      desc: "Standard high-efficiency residential/commercial panels.",
+      inverterFactor: 1.1,
+    };
+  }
+}
+
+function getBatteryRecommendation(kwh) {
+  if (kwh < 5) {
+    return {
+      chemistry: "LiFePO4 (Lithium Iron Phosphate)",
+      voltage: 24,
+      desc: "Small backup system.",
+    };
+  } else if (kwh >= 20) {
+    return {
+      chemistry: "High-Voltage LiFePO4 (HV)",
+      voltage: 400,
+      desc: "Commercial modular battery rack for high efficiency.",
+    };
+  } else {
+    return {
+      chemistry: "LiFePO4 (Server Rack Mount)",
+      voltage: 48,
+      desc: "Standard home energy storage system.",
+    };
+  }
+}
+
 /* ─────────────────────────────────────────────────────────────────────────
    Main Page
 ───────────────────────────────────────────────────────────────────────── */
@@ -522,6 +571,85 @@ export default function ResultPage() {
                   <p className="text-sm text-slate-400 mt-1.5">Saved Per Year</p>
                 </div>
               </div>
+            </div>
+
+            {/* System Specifications */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+              {result.solarSize_kW > 0 ? (
+                (() => {
+                  const rec = getSolarRecommendation(result.solarSize_kW);
+                  return (
+                    <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-6">
+                      <div className="flex items-center gap-3 mb-4">
+                        <Sun className="w-5 h-5 text-amber-400" />
+                        <h3 className="font-bold text-slate-100">Solar Panel Specifications</h3>
+                      </div>
+                      <div className="space-y-3 text-sm">
+                        <div className="flex justify-between border-b border-amber-500/10 pb-2">
+                          <span className="text-slate-400">Recommended Type</span>
+                          <span className="text-slate-200 font-medium text-right max-w-[160px] leading-tight">{rec.type}</span>
+                        </div>
+                        <div className="flex justify-between border-b border-amber-500/10 pb-2">
+                          <span className="text-slate-400">Module Power</span>
+                          <span className="text-slate-200 font-medium">{rec.power}W</span>
+                        </div>
+                        <div className="flex justify-between border-b border-amber-500/10 pb-2">
+                          <span className="text-slate-400">Estimated Panels Needed</span>
+                          <span className="text-slate-200 font-medium">{Math.ceil((result.solarSize_kW * 1000) / rec.power)} panels</span>
+                        </div>
+                        <div className="flex justify-between pb-1">
+                          <span className="text-slate-400">Inverter Minimum Size</span>
+                          <span className="text-slate-200 font-medium">{formatNumber(result.solarSize_kW * rec.inverterFactor)} kW</span>
+                        </div>
+                      </div>
+                      <p className="text-xs text-amber-500/70 mt-4 leading-relaxed">{rec.desc}</p>
+                    </div>
+                  );
+                })()
+              ) : (
+                <div className="rounded-2xl border border-slate-700/50 bg-slate-800/50 p-6 flex flex-col items-center justify-center text-center">
+                  <Sun className="w-8 h-8 text-slate-600 mb-3" />
+                  <p className="text-slate-400 text-sm">Solar panels are not recommended for this plan due to budget or optimization constraints.</p>
+                </div>
+              )}
+
+              {result.batterySize_kWh > 0 ? (
+                (() => {
+                  const rec = getBatteryRecommendation(result.batterySize_kWh);
+                  return (
+                    <div className="rounded-2xl border border-purple-500/20 bg-purple-500/5 p-6">
+                      <div className="flex items-center gap-3 mb-4">
+                        <Battery className="w-5 h-5 text-purple-400" />
+                        <h3 className="font-bold text-slate-100">Battery Specifications</h3>
+                      </div>
+                      <div className="space-y-3 text-sm">
+                        <div className="flex justify-between border-b border-purple-500/10 pb-2">
+                          <span className="text-slate-400">Recommended Chemistry</span>
+                          <span className="text-slate-200 font-medium text-right max-w-[160px] leading-tight">{rec.chemistry}</span>
+                        </div>
+                        <div className="flex justify-between border-b border-purple-500/10 pb-2">
+                          <span className="text-slate-400">System Voltage</span>
+                          <span className="text-slate-200 font-medium">{rec.voltage}V</span>
+                        </div>
+                        <div className="flex justify-between border-b border-purple-500/10 pb-2">
+                          <span className="text-slate-400">Required Capacity</span>
+                          <span className="text-slate-200 font-medium">{Math.ceil((result.batterySize_kWh * 1000) / rec.voltage)} Ah</span>
+                        </div>
+                        <div className="flex justify-between pb-1">
+                          <span className="text-slate-400">Recommended Depth of Discharge</span>
+                          <span className="text-slate-200 font-medium">80% (10% to 90%)</span>
+                        </div>
+                      </div>
+                      <p className="text-xs text-purple-400/70 mt-4 leading-relaxed">{rec.desc}</p>
+                    </div>
+                  );
+                })()
+              ) : (
+                <div className="rounded-2xl border border-slate-700/50 bg-slate-800/50 p-6 flex flex-col items-center justify-center text-center">
+                  <Battery className="w-8 h-8 text-slate-600 mb-3" />
+                  <p className="text-slate-400 text-sm">Battery storage is not recommended for this plan due to budget or optimization constraints.</p>
+                </div>
+              )}
             </div>
 
             {/* Cost comparison chart */}

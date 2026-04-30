@@ -429,6 +429,9 @@ class AlgorithmService:
 
             pv = sum(float(s.get("pv_kw", 0)) for s in steps) / len(steps)
             ld = sum(float(s.get("load_kw", 0)) for s in steps) / len(steps)
+            grid_import = sum(float(s.get("grid_import_kw", 0)) for s in steps) / len(steps)
+            grid_export = sum(float(s.get("grid_export_kw", 0)) for s in steps) / len(steps)
+            
             soc = float(steps[-1].get("soc", 0.5))
             soc_pct = soc * 100.0 if soc <= 1.01 else soc
             # Pass the whole step dictionary to dynamically determine the action
@@ -443,8 +446,8 @@ class AlgorithmService:
                     "time": t.isoformat(),
                     "solar_kW": round(pv, 2),
                     "batterySOC": round(soc_pct, 1),
-                    "gridImport": 0.0,
-                    "gridExport": 0.0,
+                    "gridImport": round(grid_import, 2),
+                    "gridExport": round(grid_export, 2),
                     "consumption": round(ld, 2),
                     "action": act,
                     "batteryAction": bact,

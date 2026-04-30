@@ -424,7 +424,7 @@ class CorePipeline:
 
         self.twin.reset(initial_soc=0.50)
         results = []
-        sim_soc = 0.50
+        sim_soc = 0.50 if self.twin.battery.capacity_kwh > 0 else 0.0
 
         for t in range(96):
             hour = t * 0.25
