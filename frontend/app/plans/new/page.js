@@ -388,7 +388,7 @@ export default function NewPlanPage() {
 
                 {/* Inline spinner */}
                 {locSearching && (
-                  <Loader className="absolute right-[6.5rem] top-1/2 -translate-y-1/2
+                  <Loader className="absolute right-26 top-1/2 -translate-y-1/2
                                     w-3.5 h-3.5 text-slate-500 animate-spin" />
                 )}
 

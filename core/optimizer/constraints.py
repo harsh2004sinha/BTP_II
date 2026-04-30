@@ -265,13 +265,19 @@ class Constraints:
         pv_used_kw = float(np.clip(pv_available_kw, 0.0, pv_available_kw))
 
         # Prevent over-charge (SOC would exceed max)
+        # Formula: energy_in = charge_kw * charge_efficiency * dt_hours
+        # So: max_charge_kw = energy / (charge_efficiency * dt_hours)
         max_charge_energy = (self.battery_soc_max - soc) * battery_capacity_kwh
-        max_charge_kw_now = max_charge_energy / dt_hours if dt_hours > 0 else 0.0
+        charge_efficiency = 0.95  # Standard efficiency factor
+        max_charge_kw_now = max_charge_energy / (charge_efficiency * dt_hours) if dt_hours > 0 else 0.0
         charge_kw = float(np.clip(charge_kw, 0.0, max(0.0, max_charge_kw_now)))
 
         # Prevent over-discharge (SOC would go below min)
+        # Formula: energy_out = discharge_kw / discharge_efficiency * dt_hours
+        # So: max_discharge_kw = energy * discharge_efficiency / dt_hours
         max_discharge_energy = (soc - self.battery_soc_min) * battery_capacity_kwh
-        max_discharge_kw_now = max_discharge_energy / dt_hours if dt_hours > 0 else 0.0
+        discharge_efficiency = 0.95  # Standard efficiency factor
+        max_discharge_kw_now = max_discharge_energy * discharge_efficiency / dt_hours if dt_hours > 0 else 0.0
         discharge_kw = float(np.clip(discharge_kw, 0.0, max(0.0, max_discharge_kw_now)))
 
         return {

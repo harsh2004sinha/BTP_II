@@ -58,6 +58,10 @@ class StateEstimator:
         # On first call OR after reset, initialize to sensor value directly
         if self._pv_smooth is None:
             self._pv_smooth = pv_sensor_kw
+        elif pv_sensor_kw <= 0.001:
+            # Snap to zero immediately when PV drops (e.g., sunset) to avoid
+            # a long exponential decay tail that shows up as night generation.
+            self._pv_smooth = 0.0
         else:
             self._pv_smooth = (
                 self.alpha * pv_sensor_kw

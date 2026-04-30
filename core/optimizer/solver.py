@@ -95,7 +95,7 @@ class Solver:
         for action in candidates:
             result = self._evaluate_action(
                 action, soc, pv_kw, load_kw, grid_price, feed_in,
-                batt_cap, batt_health)
+                batt_cap, batt_health, forecast, state.hour_of_day)
 
             evaluated.append({**action, **result})
 
@@ -178,7 +178,7 @@ class Solver:
             for action in candidates:
                 result = self._evaluate_action(
                     action, sim_soc, pv_kw, load_kw, grid_price, feed_in,
-                    batt_cap, state.battery_health)
+                    batt_cap, state.battery_health, forecast, (state.hour_of_day + t * self.dt_hours) % 24)
                 if result["total_cost"] < best_c:
                     best_c = result["total_cost"]
                     best_a = {**action, **result, "timestep": t}
@@ -244,11 +244,8 @@ class Solver:
         else:
             avail_discharge = 0.0
 
-        # ── Afternoon Reserve Rule (15:00–18:00) ────────────────────
-        # Block discharge during the last hours of sunlight so the battery
-        # stays full for the night. Override only if price is exceptionally high.
-        if 15.0 <= hour < 18.0 and grid_price < 0.20:
-            avail_discharge = 0.0
+        # The hardcoded 15:00-18:00 Afternoon Reserve Rule has been replaced 
+        # by the dynamic discharge opportunity cost in _evaluate_action.
 
         _PV_MIN   = 0.05
         has_solar = pv_kw >= _PV_MIN
@@ -363,7 +360,9 @@ class Solver:
         grid_price  : float,
         feed_in     : float,
         batt_cap    : float,
-        batt_health : float
+        batt_health : float,
+        forecast    : ForecastBundle = None,
+        hour        : float = 12.0
     ) -> dict:
         """
         Evaluate total cost of a candidate action.
@@ -411,13 +410,73 @@ class Solver:
             load_kw         = load_kw
         )
 
-        total_cost = costs["total_cost"] + cp["total_penalty"]
+        # ── Solar Opportunity Credit ──────────────────────────────────
+        # When charging from surplus solar (free energy that would be
+        # curtailed/wasted), credit the future value of stored energy.
+        # Without this credit, the optimizer prefers to curtail surplus
+        # solar rather than charge — because charging costs
+        # (degradation + maintenance) > curtailing (zero cost).
+        # The credit must fully offset degradation + maintenance to
+        # ensure storing free energy always beats wasting it.
+        solar_opportunity_credit = 0.0
+        surplus = max(0.0, pv_kw - load_kw)
+        if charge_kw > 0 and surplus > 0 and grid_import == 0.0:
+            # The charging energy is FREE (solar surplus that would be curtailed).
+            # Credit = all incremental costs of charging vs doing nothing, so that
+            # the optimizer always prefers to store free energy over curtailment.
+            # Incremental costs: degradation + extra maintenance (from higher
+            # charge_kw and pv_used_kw vs the solar_direct alternative).
+            charge_from_surplus = min(charge_kw, surplus)
+            extra_maintenance = charge_from_surplus * self.cost_fn.maintenance_rate * self.dt_hours
+            # PV used increases when charging (pv covers load + charge vs load only)
+            extra_pv_maintenance = charge_from_surplus * self.cost_fn.maintenance_rate * self.dt_hours
+            solar_opportunity_credit = (
+                deg["degradation_cost"]
+                + extra_maintenance
+                + extra_pv_maintenance
+                + 0.001  # small bonus: storing free energy is always better than wasting it
+            )
+
+        # ── Discharge Opportunity Adjustment ──────────────────────────
+        # If discharging, adjust the cost based on expected future solar surplus
+        # and future grid prices.
+        discharge_opportunity_adj = 0.0
+        if discharge_kw > 0 and forecast:
+            expected_surplus = 0.0
+            max_future_price = grid_price
+            
+            lookahead_steps = min(int(12 / self.dt_hours), forecast.horizon)
+            for i in range(lookahead_steps):
+                f_pv = forecast.pv_mean[i]
+                f_load = forecast.load_mean[i]
+                f_price = forecast.price_mean[i]
+                
+                surp = max(0.0, f_pv - f_load)
+                expected_surplus += surp * self.dt_hours
+                if f_price > max_future_price:
+                    max_future_price = f_price
+                    
+            discharged_kwh = discharge_kw * self.dt_hours
+            
+            if expected_surplus > 0:
+                # 1. Benefit of making room for future free solar
+                capture_potential = min(discharged_kwh, expected_surplus)
+                discharge_opportunity_adj -= capture_potential * (grid_price + deg["degradation_cost"])
+            else:
+                # 2. Penalty for using battery when no surplus is expected (Save for night/peak)
+                price_diff = max(0.0, max_future_price - grid_price)
+                night_reserve_value = 0.05 
+                discharge_opportunity_adj += discharged_kwh * (price_diff + night_reserve_value)
+
+        total_cost = costs["total_cost"] + cp["total_penalty"] - solar_opportunity_credit + discharge_opportunity_adj
 
         return {
             "total_cost"         : round(total_cost, 6),
             "cost_breakdown"     : costs,
             "degradation"        : deg,
             "constraint_penalty" : cp["total_penalty"],
+            "solar_opportunity_credit" : round(solar_opportunity_credit, 6),
+            "discharge_opportunity_adj": round(discharge_opportunity_adj, 6),
             "violations"         : cp["all_violations"]
         }
 

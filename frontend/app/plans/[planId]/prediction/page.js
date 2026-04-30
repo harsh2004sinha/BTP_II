@@ -33,40 +33,64 @@ import {
    Action pill
 ───────────────────────────────────────────────────────────────────────── */
 const ACTION_CONFIG = {
-  use_solar: {
-    label: "Use Solar",
+  solar: {
+    label: "Using Solar",
     color: "bg-amber-500/20 border-amber-500/30 text-amber-300",
     dot: "bg-amber-400",
     icon: Sun,
   },
-  solar_direct: {
-    label: "Use Solar",
-    color: "bg-amber-500/20 border-amber-500/30 text-amber-300",
-    dot: "bg-amber-400",
-    icon: Sun,
-  },
-  charge_battery: {
-    label: "Charging Battery",
-    color: "bg-purple-500/20 border-purple-500/30 text-purple-300",
-    dot: "bg-purple-400",
-    icon: Battery,
-  },
-  use_battery: {
-    label: "Using Battery",
-    color: "bg-violet-500/20 border-violet-500/30 text-violet-300",
-    dot: "bg-violet-400",
-    icon: Battery,
-  },
-  use_grid: {
+  grid: {
     label: "Using Grid",
     color: "bg-blue-500/20 border-blue-500/30 text-blue-300",
     dot: "bg-blue-400",
     icon: Zap,
   },
-  sell_power: {
-    label: "Selling Power",
+  battery: {
+    label: "Using Battery",
+    color: "bg-violet-500/20 border-violet-500/30 text-violet-300",
+    dot: "bg-violet-400",
+    icon: Battery,
+  },
+  solar_battery: {
+    label: "Solar + Discharging",
     color: "bg-emerald-500/20 border-emerald-500/30 text-emerald-300",
     dot: "bg-emerald-400",
+    icon: Battery,
+  },
+  solar_grid: {
+    label: "Solar + Grid",
+    color: "bg-sky-500/20 border-sky-500/30 text-sky-300",
+    dot: "bg-sky-400",
+    icon: Sun,
+  },
+  battery_grid: {
+    label: "Battery + Grid",
+    color: "bg-indigo-500/20 border-indigo-500/30 text-indigo-300",
+    dot: "bg-indigo-400",
+    icon: Zap,
+  },
+  solar_battery_grid: {
+    label: "Solar + Batt + Grid",
+    color: "bg-slate-500/20 border-slate-500/30 text-slate-300",
+    dot: "bg-slate-400",
+    icon: Activity,
+  },
+  solar_charge: {
+    label: "Solar + Charging",
+    color: "bg-purple-500/20 border-purple-500/30 text-purple-300",
+    dot: "bg-purple-400",
+    icon: Battery,
+  },
+  grid_charge: {
+    label: "Grid + Charging",
+    color: "bg-purple-500/20 border-purple-500/30 text-purple-300",
+    dot: "bg-purple-400",
+    icon: Battery,
+  },
+  solar_export: {
+    label: "Solar + Exporting",
+    color: "bg-teal-500/20 border-teal-500/30 text-teal-300",
+    dot: "bg-teal-400",
     icon: TrendingUp,
   },
   idle: {

@@ -113,14 +113,14 @@ class DigitalTwin:
         # FIX BUG 21: Scale sensor noise to system size (was fixed 0.5/1.0 kW)
         # Old: np.random.normal(0, 0.5) on PV, np.random.normal(0, 1.0) on load
         # These are fine for 100+ kW campus but cause 17-50% error on small systems
-        pv_noise   = max(0.05, pv_kw   * 0.03)   # 3% of reading, min 0.05 kW
-        load_noise = max(0.10, load_kw * 0.03)   # 3% of reading, min 0.10 kW
+        pv_noise   = max(0.05, pv_kw   * 0.03) if pv_kw > 0.001 else 0.0
+        load_noise = max(0.10, load_kw * 0.03)
 
         est = self.estimator.estimate(
             soc_model        = batt["soc"],
             voltage_sensor   = voltage_sim + np.random.normal(0, 0.2),
-            pv_sensor_kw     = pv_kw   + np.random.normal(0, pv_noise),    # FIX BUG 21
-            load_sensor_kw   = load_kw + np.random.normal(0, load_noise),  # FIX BUG 21
+            pv_sensor_kw     = pv_kw   + (np.random.normal(0, pv_noise) if pv_noise > 0 else 0.0),
+            load_sensor_kw   = load_kw + np.random.normal(0, load_noise),
             battery_capacity = self.battery.capacity_kwh
         )
 

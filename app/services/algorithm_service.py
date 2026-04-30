@@ -304,34 +304,37 @@ class AlgorithmService:
     # ============================================================
 
     @staticmethod
-    def _map_action_to_ui(name: str, pv_kw: float = None) -> str:
+    def _determine_action_key(step: dict) -> str:
         """
-        Maps internal solver action names to frontend UI action keys.
-        Optional pv_kw overrides action when there is no meaningful solar.
+        Dynamically builds an action key based on actual power flows.
         """
-        _PV_MIN = 0.05  # kW — below this solar is considered zero
+        pv_used = float(step.get("pv_used_kw") or step.get("pv_kw") or 0)
+        grid_import = float(step.get("grid_import_kw") or 0)
+        discharge = float(step.get("discharge_kw") or 0)
+        charge = float(step.get("charge_kw") or 0)
+        export = float(step.get("grid_export_kw") or 0)
 
-        n = (name or "").lower()
-
-        # If pv is explicitly provided and negligible, solar-based actions
-        # become grid or battery actions regardless of the stored action name
-        if pv_kw is not None and pv_kw < _PV_MIN:
-            if "direct" in n or ("solar" in n and "charge" not in n and "export" not in n):
-                return "use_grid"
-
-        if "export" in n or "sell" in n:
-            return "sell_power"
-        if "solar_charge" in n:
-            return "charge_battery"
-        if "grid_charge" in n:
-            return "charge_battery"
-        if "discharge" in n or "shav" in n or "peak" in n:
-            return "use_battery"          # was wrongly "use_solar" — fixed!
-        if "direct" in n or ("solar" in n and "charge" not in n):
-            return "use_solar"
-        if "grid_only" in n or "grid" in n:
-            return "use_grid"
-        return "idle"
+        sources = []
+        if pv_used > 0.05:
+            sources.append("solar")
+        if discharge > 0.05:
+            sources.append("battery")
+        if grid_import > 0.05:
+            sources.append("grid")
+            
+        if not sources:
+            if charge > 0.05:
+                return "grid_charge" # fallback if grid_import wasn't logged correctly
+            return "idle"
+            
+        src_str = "_".join(sources)
+        
+        if charge > 0.05:
+            return src_str + "_charge"
+        if export > 0.05:
+            return src_str + "_export"
+            
+        return src_str
 
     @staticmethod
     def _run_live_prediction(plan_id: str, db: Session) -> dict:
@@ -388,7 +391,7 @@ class AlgorithmService:
             "gridImport"  : float(core_result.get("grid_import_kw") or 0),
             "gridExport"  : float(core_result.get("grid_export_kw") or 0),
             "consumption" : float(core_result.get("consumption_kw") or 0),
-            "action"      : AlgorithmService._map_action_to_ui(raw_action, pv_kw=solar_kw),
+            "action"      : AlgorithmService._determine_action_key(core_result),
             "batteryAction": (
                 "charge"    if float(core_result.get("charge_kw")    or 0) > 0.05 else
                 "discharge" if float(core_result.get("discharge_kw") or 0) > 0.05 else
@@ -428,8 +431,8 @@ class AlgorithmService:
             ld = sum(float(s.get("load_kw", 0)) for s in steps) / len(steps)
             soc = float(steps[-1].get("soc", 0.5))
             soc_pct = soc * 100.0 if soc <= 1.01 else soc
-            # Pass pv to mapper so it can override solar labels when PV is 0
-            act = AlgorithmService._map_action_to_ui(steps[-1].get("action"), pv_kw=pv)
+            # Pass the whole step dictionary to dynamically determine the action
+            act = AlgorithmService._determine_action_key(steps[-1])
             cb = float(steps[-1].get("charge_kw", 0))
             db = float(steps[-1].get("discharge_kw", 0))
             bact = "charge" if cb > 0.05 else ("discharge" if db > 0.05 else "idle")

@@ -196,9 +196,7 @@ class SystemSizer:
 
             # ── DEFICIT: use battery if allowed by time-of-day rule ─────
             else:
-                # Afternoon reserve: 15:00-18:00 — keep battery for night
-                is_afternoon = 15.0 <= hour < 18.0
-                if battery and battery.soc > battery.soc_min + 0.01 and not is_afternoon:
+                if battery and battery.soc > battery.soc_min + 0.01:
                     avail        = battery.available_discharge_kw(self.dt_hours)
                     discharge_kw = min(net, avail)
                     net         -= discharge_kw
