@@ -34,3 +34,15 @@ python-dotenv>=1.0.0
 
 # Testing
 pytest>=7.4.0
+
+# Deployment
+psycopg2-binary>=2.9.9
+gunicorn>=21.2.0
+
+apscheduler
+pydantic_settings
+psycopg2
+aiofiles
+pydantic[email]
+pymupdf
+pypdf2
